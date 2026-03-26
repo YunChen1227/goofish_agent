@@ -7,12 +7,14 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="GOOFISH_", env_file=".env")
 
     # LLM
-    openai_api_key: Optional[str] = None
-    openai_base_url: str = "https://api.openai.com/v1"
-    vlm_model: str = "gpt-4o"
-    llm_model: str = "gpt-4o"
-    deepseek_api_key: Optional[str] = None
-    deepseek_base_url: str = "https://api.deepseek.com/v1"
+    llm_model: str = "qwen3.5-plus"
+    llm_api_key: Optional[str] = "sk-06adda93c6e1486a9536093aa7376596"
+    llm_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+    # VLM
+    vlm_model: str = "qwen3.5-plus"
+    vlm_api_key: Optional[str] = "sk-06adda93c6e1486a9536093aa7376596"
+    vlm_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
     # Database
     database_url: str = "sqlite:///goofish_agent.db"

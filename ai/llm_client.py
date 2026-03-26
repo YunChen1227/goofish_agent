@@ -16,8 +16,8 @@ class LLMClient:
         s = get_settings()
         self._model = model or s.llm_model
         self._client = AsyncOpenAI(
-            api_key=api_key or s.openai_api_key,
-            base_url=base_url or s.openai_base_url,
+            api_key=api_key or s.llm_api_key,
+            base_url=base_url or s.llm_base_url,
         )
 
     @retry(max_retries=3, exceptions=(Exception,))
