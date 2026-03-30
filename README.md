@@ -62,7 +62,7 @@
 
 ```bash
 # Windows PowerShell
-$env:PYTHONPATH = "d:\workspace"   # 改为你的上一级目录
+set PYTHONPATH=D:\workspace  # 改为你的上一级目录
 
 # Linux / macOS
 export PYTHONPATH=/path/to/workspace

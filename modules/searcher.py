@@ -9,8 +9,8 @@ from sqlmodel import Session
 from goofish_agent.ai.vlm_client import VLMClient
 from goofish_agent.models.candidate import ProductCandidate
 from goofish_agent.models.task import Task
-from goofish_agent.platform.client import GoofishClient
-from goofish_agent.platform.parsers.detail_parser import ProductDetail
+from goofish_agent.goofish_platform.client import GoofishClient
+from goofish_agent.goofish_platform.parsers.detail_parser import ProductDetail
 
 
 class Searcher:
@@ -26,14 +26,24 @@ class Searcher:
 
         briefs = await self._client.search(task.keywords, self._build_filters(task))
 
+        MAX_DETAIL_ATTEMPTS = 10
+
         candidates: list[ProductCandidate] = []
+        attempts = 0
         for brief in briefs[: task.max_candidates]:
+            if not brief.product_id:
+                continue
+            attempts += 1
             detail = await self._client.get_product_detail(brief.product_id)
             if not detail:
-                continue
-            if not self._passes_filters(detail, task):
-                continue
-            candidates.append(self._to_candidate(detail, task.id))
+                logger.debug(f"[{attempts}/{MAX_DETAIL_ATTEMPTS}] 详情获取失败: {brief.product_id}")
+            elif not self._passes_filters(detail, task):
+                logger.debug(f"[{attempts}/{MAX_DETAIL_ATTEMPTS}] 未通过筛选: {brief.title}")
+            else:
+                candidates.append(self._to_candidate(detail, task.id))
+            if attempts >= MAX_DETAIL_ATTEMPTS:
+                logger.info(f"已检查 {MAX_DETAIL_ATTEMPTS} 个商品，停止搜索")
+                break
 
         if task.reference_images:
             candidates = await self._apply_image_matching(candidates, task)

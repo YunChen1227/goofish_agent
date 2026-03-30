@@ -8,7 +8,7 @@ from goofish_agent.models.assessment import AssessmentReport
 from goofish_agent.models.candidate import ProductCandidate
 from goofish_agent.models.enums import CandidateStatus
 from goofish_agent.models.task import Task
-from goofish_agent.platform.client import GoofishClient
+from goofish_agent.goofish_platform.client import GoofishClient
 
 
 class Favoriter:

@@ -17,8 +17,8 @@ from goofish_agent.models.conversation import SellerConversation
 from goofish_agent.models.enums import CandidateStatus, ChatStatus, NegotiationStatus
 from goofish_agent.models.negotiation import NegotiationRecord
 from goofish_agent.models.task import Task
-from goofish_agent.platform.anti_detect import AntiDetect
-from goofish_agent.platform.client import GoofishClient
+from goofish_agent.goofish_platform.anti_detect import AntiDetect
+from goofish_agent.goofish_platform.client import GoofishClient
 
 
 class Negotiator:

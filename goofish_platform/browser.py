@@ -39,9 +39,15 @@ class BrowserEngine:
         return await self._context.new_page()
 
     async def close(self) -> None:
-        if self._context:
-            await self._context.close()
-        if self._playwright:
-            await self._playwright.stop()
+        try:
+            if self._context:
+                await self._context.close()
+        except Exception:
+            pass
+        try:
+            if self._playwright:
+                await self._playwright.stop()
+        except Exception:
+            pass
         self._context = None
         self._playwright = None

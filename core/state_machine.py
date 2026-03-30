@@ -25,8 +25,8 @@ VALID_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
     },
     TaskStatus.PAUSED: {TaskStatus.RUNNING, TaskStatus.CANCELLED},
     TaskStatus.ERROR: {TaskStatus.RUNNING, TaskStatus.CANCELLED},
-    TaskStatus.COMPLETED: set(),
-    TaskStatus.FAILED: set(),
+    TaskStatus.COMPLETED: set[TaskStatus](),
+    TaskStatus.FAILED: set[TaskStatus](),
     TaskStatus.CANCELLED: set(),
 }
 
@@ -34,7 +34,7 @@ VALID_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
 class StateMachine:
     @staticmethod
     def can_transition(current: TaskStatus, target: TaskStatus) -> bool:
-        return target in VALID_TRANSITIONS.get(current, set())
+        return target in VALID_TRANSITIONS.get(current, set[TaskStatus]())
 
     @staticmethod
     def transition(task: Task, target_status: TaskStatus) -> None:

@@ -22,7 +22,7 @@ from goofish_agent.modules.favoriter import Favoriter
 from goofish_agent.modules.negotiator import Negotiator
 from goofish_agent.modules.notifier import Notifier
 from goofish_agent.modules.searcher import Searcher
-from goofish_agent.platform.client import GoofishClient
+from goofish_agent.goofish_platform.client import GoofishClient
 from goofish_agent.storage.database import get_session
 from goofish_agent.storage.media_store import MediaStore
 
