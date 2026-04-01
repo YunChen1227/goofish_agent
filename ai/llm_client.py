@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from loguru import logger
 from openai import AsyncOpenAI
 
 from goofish_agent.config.settings import get_settings
@@ -27,13 +28,20 @@ class LLMClient:
         messages: list[dict],
         temperature: float = 0.7,
     ) -> str:
+        logger.debug(
+            f"[LLM chat] 发送请求 | 模型: {self._model} | "
+            f"消息数: {len(messages)} | temperature: {temperature}"
+        )
+        logger.debug(f"[LLM chat] System: {system_prompt[:200]}")
         msgs = [{"role": "system", "content": system_prompt}, *messages]
         resp = await self._client.chat.completions.create(
             model=self._model,
             messages=msgs,
             temperature=temperature,
         )
-        return resp.choices[0].message.content or ""
+        result = resp.choices[0].message.content or ""
+        logger.debug(f"[LLM chat] 模型回复: {result[:300]}")
+        return result
 
     @retry(max_retries=3, exceptions=(Exception,))
     async def generate(
@@ -42,6 +50,11 @@ class LLMClient:
         user_message: str,
         temperature: float = 0.7,
     ) -> str:
+        logger.debug(
+            f"[LLM generate] 发送请求 | 模型: {self._model} | temperature: {temperature}"
+        )
+        logger.debug(f"[LLM generate] System: {system_prompt[:200]}")
+        logger.debug(f"[LLM generate] User: {user_message[:300]}")
         resp = await self._client.chat.completions.create(
             model=self._model,
             messages=[
@@ -50,4 +63,6 @@ class LLMClient:
             ],
             temperature=temperature,
         )
-        return resp.choices[0].message.content or ""
+        result = resp.choices[0].message.content or ""
+        logger.debug(f"[LLM generate] 模型回复: {result[:300]}")
+        return result

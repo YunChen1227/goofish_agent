@@ -22,9 +22,15 @@ class Searcher:
         self._session = session
 
     async def execute(self, task: Task) -> list[ProductCandidate]:
-        logger.info(f"Phase 1: 搜索 '{task.keywords}'")
+        logger.info(
+            f"Phase 1: 搜索 '{task.keywords}' | "
+            f"价格区间: ¥{task.min_price}-¥{task.max_price} | "
+            f"目标价: ¥{task.target_price} | "
+            f"排除关键词: {task.exclude_keywords or '无'}"
+        )
 
         briefs = await self._client.search(task.keywords, self._build_filters(task))
+        logger.info(f"[搜索] 搜索到 {len(briefs)} 个结果，开始逐一检查")
 
         MAX_DETAIL_ATTEMPTS = 10
 
@@ -36,19 +42,33 @@ class Searcher:
             attempts += 1
             detail = await self._client.get_product_detail(brief.product_id)
             if not detail:
-                logger.debug(f"[{attempts}/{MAX_DETAIL_ATTEMPTS}] 详情获取失败: {brief.product_id}")
+                logger.info(f"[搜索 {attempts}/{MAX_DETAIL_ATTEMPTS}] ✗ 详情获取失败: {brief.product_id}")
             elif not self._passes_filters(detail, task):
-                logger.debug(f"[{attempts}/{MAX_DETAIL_ATTEMPTS}] 未通过筛选: {brief.title}")
+                logger.info(f"[搜索 {attempts}/{MAX_DETAIL_ATTEMPTS}] ✗ 未通过筛选: {brief.title}")
             else:
                 candidates.append(self._to_candidate(detail, task.id))
+                logger.info(
+                    f"[搜索 {attempts}/{MAX_DETAIL_ATTEMPTS}] ✓ 通过筛选: {detail.title} | "
+                    f"¥{detail.price} | 卖家信用: {detail.seller_credit}"
+                )
             if attempts >= MAX_DETAIL_ATTEMPTS:
                 logger.info(f"已检查 {MAX_DETAIL_ATTEMPTS} 个商品，停止搜索")
                 break
 
         if task.reference_images:
+            logger.info(f"[搜索] 开始图片匹配，参考图片: {len(task.reference_images)}张")
             candidates = await self._apply_image_matching(candidates, task)
 
         candidates = self._score_and_sort(candidates, task)
+
+        if candidates:
+            logger.info("[搜索] 初始评分排序结果:")
+            for i, c in enumerate(candidates, 1):
+                img_info = f" | 图片匹配: {c.image_match_score:.2f}" if c.image_match_score is not None else ""
+                logger.info(
+                    f"  #{i} {c.title} | ¥{c.price} | "
+                    f"综合评分: {c.initial_score:.3f}{img_info}"
+                )
 
         for c in candidates:
             self._session.add(c)
@@ -66,12 +86,22 @@ class Searcher:
 
     def _passes_filters(self, detail: ProductDetail, task: Task) -> bool:
         if not (task.min_price <= detail.price <= task.max_price):
+            logger.info(
+                f"    筛选淘汰原因: 价格 ¥{detail.price} 不在区间 "
+                f"¥{task.min_price}-¥{task.max_price}"
+            )
             return False
         desc_lower = (detail.title + detail.description).lower()
-        if any(kw.lower() in desc_lower for kw in task.exclude_keywords):
+        hit_keywords = [kw for kw in task.exclude_keywords if kw.lower() in desc_lower]
+        if hit_keywords:
+            logger.info(f"    筛选淘汰原因: 命中排除关键词 {hit_keywords}")
             return False
         if task.seller_min_credit and detail.seller_credit:
             if detail.seller_credit < task.seller_min_credit:
+                logger.info(
+                    f"    筛选淘汰原因: 卖家信用 {detail.seller_credit} < "
+                    f"最低要求 {task.seller_min_credit}"
+                )
                 return False
         return True
 
@@ -79,16 +109,26 @@ class Searcher:
         self, candidates: list[ProductCandidate], task: Task
     ) -> list[ProductCandidate]:
         matched: list[ProductCandidate] = []
-        for c in candidates:
+        for i, c in enumerate(candidates, 1):
             if c.images:
+                logger.info(f"[图片匹配 {i}/{len(candidates)}] 对比: {c.title}")
                 score = await self._vlm.match_images(c.images[:3], task.reference_images)
                 c.image_match_score = score
                 if score >= task.image_match_threshold:
+                    logger.info(
+                        f"[图片匹配 {i}/{len(candidates)}] ✓ 匹配度 {score:.2f} "
+                        f"≥ 阈值 {task.image_match_threshold} → 保留"
+                    )
                     matched.append(c)
                 else:
-                    logger.debug(f"图片匹配度 {score:.2f} 低于阈值, 跳过: {c.title}")
+                    logger.info(
+                        f"[图片匹配 {i}/{len(candidates)}] ✗ 匹配度 {score:.2f} "
+                        f"< 阈值 {task.image_match_threshold} → 淘汰"
+                    )
             else:
+                logger.info(f"[图片匹配 {i}/{len(candidates)}] 无商品图片，跳过匹配: {c.title}")
                 matched.append(c)
+        logger.info(f"[图片匹配] 结果: {len(matched)}/{len(candidates)} 通过图片匹配")
         return matched
 
     def _score_and_sort(

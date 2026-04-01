@@ -25,25 +25,57 @@ class Assessor:
     async def execute(
         self, candidates: list[ProductCandidate], task: Task
     ) -> list[AssessmentReport]:
-        logger.info(f"Phase 2: 品相鉴定 {len(candidates)} 个商品")
+        logger.info(
+            f"Phase 2: 品相鉴定 {len(candidates)} 个商品 | "
+            f"最低品相要求: {task.condition_requirement} (分数≥{task.condition_requirement.score})"
+        )
         reports: list[AssessmentReport] = []
 
-        for candidate in candidates:
+        for idx, candidate in enumerate(candidates, 1):
+            logger.info(
+                f"{'='*60}\n"
+                f"[品相鉴定 {idx}/{len(candidates)}] 开始分析商品: {candidate.title}\n"
+                f"  价格: ¥{candidate.price} | 卖家: {candidate.seller_name} | "
+                f"图片数: {len(candidate.images)}"
+            )
+
             report = await self._assess_one(candidate, task)
             if not report:
+                logger.warning(f"[品相鉴定 {idx}/{len(candidates)}] 评估失败，跳过该商品")
                 continue
+
             reports.append(report)
-            if report.condition_score < task.condition_requirement.score:
+            threshold = task.condition_requirement.score
+            passed = report.condition_score >= threshold
+
+            logger.info(
+                f"[品相鉴定 {idx}/{len(candidates)}] 分析结果汇总:\n"
+                f"  商品: {candidate.title}\n"
+                f"  品相等级: {report.condition_grade.name}\n"
+                f"  品相评分: {report.condition_score}/10 (要求≥{threshold})\n"
+                f"  描述一致性: {report.description_match}/10\n"
+                f"  瑕疵数量: {len(report.defects)}\n"
+                f"  风险标记: {report.risk_flags if report.risk_flags else '无'}\n"
+                f"  配件已确认: {report.accessories_confirmed if report.accessories_confirmed else '无'}\n"
+                f"  配件缺失: {report.accessories_missing if report.accessories_missing else '无'}\n"
+                f"  评估总结: {report.summary}\n"
+                f"  >>> 判定: {'✓ 通过' if passed else '✗ 不通过'}"
+            )
+
+            if not passed:
                 candidate.status = CandidateStatus.REJECTED
                 logger.info(
-                    f"品相不达标: {candidate.title} "
-                    f"({report.condition_score} < {task.condition_requirement.score})"
+                    f"[品相鉴定] 商品被淘汰: {candidate.title} | "
+                    f"评分 {report.condition_score} < 要求 {threshold}"
                 )
             self._session.add(report)
 
         self._session.commit()
-        passed = [r for r in reports if r.condition_score >= task.condition_requirement.score]
-        logger.info(f"Phase 2 完成: {len(passed)}/{len(candidates)} 通过品相鉴定")
+        passed_reports = [r for r in reports if r.condition_score >= task.condition_requirement.score]
+        logger.info(
+            f"{'='*60}\n"
+            f"Phase 2 完成: {len(passed_reports)}/{len(candidates)} 通过品相鉴定"
+        )
         return reports
 
     async def _assess_one(

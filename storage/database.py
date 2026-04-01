@@ -11,6 +11,7 @@ engine = create_engine(settings.database_url, echo=False)
 
 
 def init_db() -> None:
+    import goofish_agent.models  # noqa: F401 — register all table models before create_all
     SQLModel.metadata.create_all(engine)
 
 

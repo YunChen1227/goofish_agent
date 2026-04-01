@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from loguru import logger
 from openai import AsyncOpenAI
 
 from goofish_agent.config.settings import get_settings
@@ -39,6 +40,14 @@ class VLMClient:
         system_prompt = build_assessment_prompt(description, has_reference=has_ref)
         user_text = build_assessment_user_message(description)
 
+        logger.info(
+            f"[VLM 品相鉴定] 发送请求 | 模型: {self._model} | "
+            f"商品图片: {len(images)}张 | "
+            f"参考图片: {len(reference_images) if reference_images else 0}张"
+        )
+        logger.debug(f"[VLM 品相鉴定] 商品描述: {description[:200]}")
+        logger.debug(f"[VLM 品相鉴定] System Prompt:\n{system_prompt[:500]}")
+
         content: list[dict] = [{"type": "text", "text": user_text}]
         content.extend(self._build_image_content(images, label="商品图片"))
         if reference_images:
@@ -54,12 +63,51 @@ class VLMClient:
             response_format={"type": "json_object"},
             max_tokens=2048,
         )
-        return json.loads(resp.choices[0].message.content or "{}")
+        raw_content = resp.choices[0].message.content or "{}"
+        result = json.loads(raw_content)
+
+        logger.info(
+            f"[VLM 品相鉴定] 模型返回结果 | "
+            f"品相等级: {result.get('condition_grade', 'N/A')} | "
+            f"品相评分: {result.get('condition_score', 'N/A')}/10 | "
+            f"描述一致性: {result.get('description_match', 'N/A')}/10"
+        )
+        if result.get("defects"):
+            for i, defect in enumerate(result["defects"], 1):
+                logger.info(
+                    f"[VLM 品相鉴定]   瑕疵{i}: "
+                    f"位置={defect.get('location', '未知')} | "
+                    f"严重度={defect.get('severity', '未知')} | "
+                    f"{defect.get('description', '')}"
+                )
+        else:
+            logger.info("[VLM 品相鉴定]   瑕疵: 无")
+        if result.get("risk_flags"):
+            logger.warning(f"[VLM 品相鉴定]   风险标记: {result['risk_flags']}")
+        if result.get("accessories_missing"):
+            logger.info(f"[VLM 品相鉴定]   缺失配件: {result['accessories_missing']}")
+        if result.get("accessories_confirmed"):
+            logger.info(f"[VLM 品相鉴定]   已确认配件: {result['accessories_confirmed']}")
+        if result.get("reference_match"):
+            ref = result["reference_match"]
+            logger.info(
+                f"[VLM 品相鉴定]   参考图对比: 匹配度={ref.get('score', 'N/A')} | "
+                f"一致项={ref.get('matched_aspects', [])} | "
+                f"差异项={ref.get('differences', [])}"
+            )
+        logger.info(f"[VLM 品相鉴定]   总结: {result.get('summary', '无')}")
+
+        return result
 
     @retry(max_retries=2, exceptions=(Exception,))
     async def match_images(
         self, product_images: list[str], reference_images: list[str]
     ) -> float:
+        logger.debug(
+            f"[VLM 图片匹配] 发送请求 | "
+            f"商品图片: {len(product_images)}张 | 参考图片: {len(reference_images)}张"
+        )
+
         content: list[dict] = [{"type": "text", "text": IMAGE_MATCH_PROMPT}]
         content.append({"type": "text", "text": "商品实物图片:"})
         content.extend(self._build_image_content(product_images))
@@ -73,9 +121,13 @@ class VLMClient:
         )
         raw = (resp.choices[0].message.content or "0").strip()
         try:
-            return max(0.0, min(1.0, float(raw)))
+            score = max(0.0, min(1.0, float(raw)))
         except ValueError:
-            return 0.0
+            logger.warning(f"[VLM 图片匹配] 无法解析模型返回值: '{raw}'，默认为0")
+            score = 0.0
+
+        logger.info(f"[VLM 图片匹配] 匹配度: {score:.2f}")
+        return score
 
     @staticmethod
     def _build_image_content(

@@ -45,31 +45,43 @@ class Negotiator:
         task: Task,
     ) -> list[NegotiationRecord]:
         ready = [c for c in conversations if c.chat_status == ChatStatus.READY]
-        logger.info(f"Phase 5: 价格谈判 {len(ready)} 个卖家")
+        logger.info(
+            f"Phase 5: 价格谈判 {len(ready)} 个卖家 | "
+            f"目标价: ¥{task.target_price} | 最高价: ¥{task.max_price} | "
+            f"最大轮数: {task.negotiate_rounds_limit}"
+        )
         records: list[NegotiationRecord] = []
 
-        for conv in ready:
+        for idx, conv in enumerate(ready, 1):
             candidate = next((c for c in candidates if c.id == conv.candidate_id), None)
             if not candidate:
                 continue
             candidate.status = CandidateStatus.NEGOTIATING
             conv.chat_status = ChatStatus.NEGOTIATING
+            logger.info(
+                f"{'='*60}\n"
+                f"[谈判 {idx}/{len(ready)}] 开始谈判: {candidate.title} | "
+                f"卖家报价: ¥{candidate.price} | 目标: ¥{task.target_price}"
+            )
 
             record = await self._negotiate(conv, candidate, candidates, task)
             records.append(record)
             self._session.add(record)
 
+            logger.info(
+                f"[谈判 {idx}/{len(ready)}] 谈判结果: {record.status.name} | "
+                f"共 {record.round_count} 轮"
+                + (f" | 成交价: ¥{record.agreed_price}" if record.agreed_price else "")
+            )
+
             if record.status == NegotiationStatus.AGREED:
                 candidate.status = CandidateStatus.AGREED
-                logger.info(
-                    f"达成协议: {candidate.title} ¥{record.agreed_price}"
-                )
 
         self._session.commit()
+        agreed = sum(1 for r in records if r.status == NegotiationStatus.AGREED)
         logger.info(
-            f"Phase 5 完成: "
-            f"{sum(1 for r in records if r.status == NegotiationStatus.AGREED)}"
-            f"/{len(records)} 成功"
+            f"{'='*60}\n"
+            f"Phase 5 完成: {agreed}/{len(records)} 成功"
         )
         return records
 
@@ -85,6 +97,12 @@ class Negotiator:
         task: Task,
     ) -> NegotiationRecord:
         market = await self._market.analyze(task.keywords, all_candidates, candidate.price)
+        logger.info(
+            f"[谈判] 市场分析数据: "
+            f"闲鱼行情={market.goofish or '暂无'} | "
+            f"跨平台={market.cross_platform or '暂无'} | "
+            f"卖家对比={market.seller_comparison or '暂无'}"
+        )
 
         record = NegotiationRecord(
             id=uuid4(),
@@ -104,13 +122,24 @@ class Negotiator:
 
         for round_num in range(1, task.negotiate_rounds_limit + 1):
             record.round_count = round_num
+            logger.info(
+                f"[谈判 第{round_num}轮] 当前卖家价: ¥{seller_price} | "
+                f"目标价: ¥{task.target_price} | 最高可接受: ¥{task.max_price}"
+            )
 
             if seller_price <= task.target_price:
                 record.agreed_price = seller_price
                 record.status = NegotiationStatus.AGREED
+                logger.info(
+                    f"[谈判 第{round_num}轮] 卖家价 ¥{seller_price} "
+                    f"≤ 目标价 ¥{task.target_price}，直接成交"
+                )
                 return record
 
             defects = self._get_defect_descriptions(candidate.id)
+            if defects:
+                logger.info(f"[谈判 第{round_num}轮] 可用砍价瑕疵: {defects}")
+
             prompt = build_negotiation_prompt(
                 round_num=round_num,
                 seller_price=seller_price,
@@ -121,22 +150,33 @@ class Negotiator:
                 chat_history=conv.messages,
             )
             message = await self._llm.generate(NEGOTIATION_SYSTEM_PROMPT, prompt)
+            logger.info(f"[谈判 第{round_num}轮] LLM生成谈判话术: {message[:200]}")
 
             if round_num >= 3:
                 offer = self._compute_offer(round_num, task.target_price, task.max_price, record)
                 record.current_offer = offer
+                logger.info(f"[谈判 第{round_num}轮] 计算报价: ¥{offer:.2f}")
 
             await self._send(conv, candidate.seller_id, message)
             reply = await self._wait_for_reply(conv)
 
             if not reply:
                 record.status = NegotiationStatus.FAILED
+                logger.info(f"[谈判 第{round_num}轮] 卖家未回复，谈判失败")
                 return record
+
+            logger.info(f"[谈判 第{round_num}轮] 卖家回复: {reply[:200]}")
 
             counter = self._extract_price(reply)
             if counter:
                 record.seller_counter = counter
+                logger.info(
+                    f"[谈判 第{round_num}轮] 提取到卖家还价: ¥{counter} "
+                    f"(变化: ¥{seller_price} → ¥{counter})"
+                )
                 seller_price = counter
+            else:
+                logger.info(f"[谈判 第{round_num}轮] 未从回复中提取到具体价格")
 
             record.history.append({
                 "round": round_num,
@@ -148,14 +188,20 @@ class Negotiator:
 
             if self._is_rejection(reply):
                 record.status = NegotiationStatus.REJECTED
+                logger.info(f"[谈判 第{round_num}轮] 卖家拒绝交易，谈判终止")
                 return record
 
             if seller_price <= task.max_price and round_num >= task.negotiate_rounds_limit - 1:
                 record.agreed_price = seller_price
                 record.status = NegotiationStatus.AGREED
+                logger.info(
+                    f"[谈判 第{round_num}轮] 卖家价 ¥{seller_price} "
+                    f"≤ 最高价 ¥{task.max_price} 且已到后期轮次，接受成交"
+                )
                 return record
 
         record.status = NegotiationStatus.STALEMATE
+        logger.info(f"[谈判] 达到最大轮数 {task.negotiate_rounds_limit}，僵局结束")
         return record
 
     # ------------------------------------------------------------------
