@@ -9,6 +9,7 @@ from sqlmodel import Field, SQLModel
 from .enums import (
     ConditionGrade,
     NotificationChannel,
+    PlatformType,
     TaskPhase,
     TaskStatus,
 )
@@ -17,6 +18,7 @@ from .enums import (
 class Task(SQLModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     user_id: UUID
+    platform: PlatformType
     keywords: str
     min_price: float = 0
     max_price: float

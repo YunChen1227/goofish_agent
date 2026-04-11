@@ -3,7 +3,7 @@ NEGOTIATION_SYSTEM_PROMPT = """你是一位精明但友好的买家，正在与�
 谈判原则:
 - 先不直接出价，引导卖家让步
 - 合理引用商品瑕疵、市场行情作为议价依据
-- 可引用其他平台全新价格和闲鱼同款低价
+- 可引用其他平台全新价格和同平台同款低价
 - 语气保持友好，表达诚意
 - 只输出消息内容，不要解释策略"""
 
@@ -16,6 +16,7 @@ def build_negotiation_prompt(
     defects: list[str],
     market_data: dict,
     chat_history: list[dict],
+    platform_name: str = "闲鱼",
 ) -> str:
     history_text = "\n".join(
         f"{'我' if m['role'] == 'buyer' else '卖家'}: {m['content']}"
@@ -23,8 +24,10 @@ def build_negotiation_prompt(
     )
 
     market_info: list[str] = []
-    if gf := market_data.get("goofish"):
-        market_info.append(f"闲鱼同款均价{gf.get('avg_price')}，最低{gf.get('lowest_price')}")
+    if pp := market_data.get("primary_platform"):
+        market_info.append(
+            f"{platform_name}同款均价{pp.get('avg_price')}，最低{pp.get('lowest_price')}"
+        )
     if cp := market_data.get("cross_platform"):
         if anchor := cp.get("new_price_anchor"):
             market_info.append(f"全新最低价{anchor}")

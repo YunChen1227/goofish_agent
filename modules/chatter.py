@@ -15,7 +15,7 @@ from goofish_agent.models.conversation import SellerConversation
 from goofish_agent.models.enums import CandidateStatus, ChatStatus
 from goofish_agent.models.task import Task
 from goofish_agent.goofish_platform.anti_detect import AntiDetect
-from goofish_agent.goofish_platform.client import GoofishClient
+from goofish_agent.platform.base import PlatformClient
 
 
 class Chatter:
@@ -25,7 +25,7 @@ class Chatter:
     MAX_MESSAGES = 20
     INFO_CHECKLIST = ["使用时长", "出售原因", "隐藏瑕疵", "配件情况", "保修状态", "交易方式"]
 
-    def __init__(self, client: GoofishClient, llm: LLMClient, session: Session) -> None:
+    def __init__(self, client: PlatformClient, llm: LLMClient, session: Session) -> None:
         self._client = client
         self._llm = llm
         self._session = session

@@ -12,13 +12,25 @@ from goofish_agent.goofish_platform.browser import BrowserEngine
 from goofish_agent.goofish_platform.parsers.chat_parser import ChatMessage, ChatParser
 from goofish_agent.goofish_platform.parsers.detail_parser import DetailParser, ProductDetail
 from goofish_agent.goofish_platform.parsers.search_parser import ProductBrief, SearchParser
+from goofish_agent.platform.base import GOOFISH_CONFIG, PlatformClient, PlatformConfig
 from goofish_agent.utils.rate_limiter import RateLimiterRegistry
 
 
-class GoofishClient:
-    def __init__(self) -> None:
-        self._browser_engine = BrowserEngine()
-        self._auth = AuthManager(self._browser_engine)
+class GoofishClient(PlatformClient):
+    def __init__(self, config: PlatformConfig | None = None) -> None:
+        super().__init__(config or GOOFISH_CONFIG)
+        self._browser_engine = BrowserEngine(
+            locale=self.config.locale,
+            timezone_id=self.config.timezone_id,
+        )
+        self._auth = AuthManager(
+            self._browser_engine,
+            base_url=self.config.base_url,
+            login_button_text=self.config.login_button_text,
+            auth_url_keywords=self.config.auth_url_keywords,
+            modal_selectors=self.config.modal_selectors,
+            cookie_prefix=f"{self.config.name}_",
+        )
         self._anti = AntiDetect()
         self._rate_limiters = RateLimiterRegistry(get_settings())
         self._page: Page | None = None
@@ -43,21 +55,24 @@ class GoofishClient:
 
     def _ensure_page(self) -> Page:
         if self._page is None:
-            raise RuntimeError("GoofishClient not started – call start() first")
+            raise RuntimeError(
+                f"PlatformClient({self.config.name}) not started – call start() first"
+            )
         return self._page
 
     async def search(self, query: str, filters: dict | None = None) -> list[ProductBrief]:
         page = self._ensure_page()
         await self._rate_limiters.search.acquire()
-        url = f"https://www.goofish.com/search?q={quote(query)}"
+        url = self.config.search_url_template.format(query=quote(query))
         await page.goto(url, wait_until="domcontentloaded")
         await self._anti.random_browse_pause()
-        return await SearchParser.parse(page)
+        return await SearchParser.parse(page, self.config)
 
     async def get_product_detail(self, product_id: str) -> ProductDetail | None:
         page = self._ensure_page()
         await self._rate_limiters.detail.acquire()
-        await page.goto(f"https://www.goofish.com/item?id={product_id}")
+        url = self.config.item_url_template.format(product_id=product_id)
+        await page.goto(url)
         await self._anti.random_browse_pause()
         return await DetailParser.parse(page)
 
@@ -68,24 +83,20 @@ class GoofishClient:
     async def add_to_favorites(self, product_id: str) -> bool:
         page = self._ensure_page()
         await self._rate_limiters.favorite.acquire()
-        # TODO: navigate to product and click favorite button
-        logger.info(f"收藏商品 {product_id}")
+        logger.info(f"[{self.config.display_name}] 收藏商品 {product_id}")
         return True
 
     async def send_message(self, seller_id: str, message: str) -> bool:
         page = self._ensure_page()
         await self._rate_limiters.message.acquire()
         await self._anti.random_delay(5, 15)
-        # TODO: navigate to chat and send message
-        logger.info(f"发送消息给卖家 {seller_id}")
+        logger.info(f"[{self.config.display_name}] 发送消息给卖家 {seller_id}")
         return True
 
     async def get_messages(self, conversation_id: str) -> list[ChatMessage]:
         page = self._ensure_page()
-        # TODO: navigate to conversation page
         return await ChatParser.parse_messages(page)
 
     async def get_seller_info(self, seller_id: str) -> dict:
         page = self._ensure_page()
-        # TODO: navigate to seller profile and parse
         return {"seller_id": seller_id}

@@ -11,7 +11,7 @@ def setup_logging(level: str = "INFO") -> None:
         format="{time:YYYY-MM-DD HH:mm:ss} | {level:<8} | {name}:{function}:{line} - {message}",
     )
     logger.add(
-        "logs/goofish_agent.log",
+        "logs/buyer_agent.log",
         level=level,
         rotation="10 MB",
         format="{time:YYYY-MM-DD HH:mm:ss} | {level:<8} | {name}:{function}:{line} - {message}",

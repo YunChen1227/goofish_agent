@@ -8,13 +8,13 @@ from goofish_agent.models.assessment import AssessmentReport
 from goofish_agent.models.candidate import ProductCandidate
 from goofish_agent.models.enums import CandidateStatus
 from goofish_agent.models.task import Task
-from goofish_agent.goofish_platform.client import GoofishClient
+from goofish_agent.platform.base import PlatformClient
 
 
 class Favoriter:
     """Phase 3: Favorite passed candidates, compute composite score, rank."""
 
-    def __init__(self, client: GoofishClient, session: Session) -> None:
+    def __init__(self, client: PlatformClient, session: Session) -> None:
         self._client = client
         self._session = session
 

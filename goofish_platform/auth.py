@@ -10,10 +10,19 @@ from playwright.async_api import BrowserContext, Page
 from goofish_agent.goofish_platform.browser import BrowserEngine
 from goofish_agent.utils.crypto import CredentialCrypto
 
-BASE_URL = "https://www.goofish.com/"
-AUTH_URL_KEYWORDS = ("login", "verify", "auth", "captcha", "security")
 MAX_WAIT_SECONDS = 300
 POLL_INTERVAL = 3
+
+_DEFAULT_AUTH_URL_KEYWORDS = ("login", "verify", "auth", "captcha", "security")
+_DEFAULT_MODAL_SELECTORS = (
+    '[class*="login"][class*="modal"]',
+    '[class*="login"][class*="dialog"]',
+    '[class*="login"][class*="popup"]',
+    '[class*="modal-mask"]',
+    '[class*="overlay"][class*="login"]',
+    '[class*="baxia"]',
+    'iframe[src*="login"]',
+)
 
 
 class AuthManager:
@@ -23,13 +32,24 @@ class AuthManager:
         self,
         browser_engine: BrowserEngine,
         crypto: CredentialCrypto | None = None,
+        *,
+        base_url: str = "https://www.goofish.com/",
+        login_button_text: str = "登录",
+        auth_url_keywords: tuple[str, ...] | None = None,
+        modal_selectors: tuple[str, ...] | None = None,
+        cookie_prefix: str = "",
     ) -> None:
         self._browser = browser_engine
         self._crypto = crypto
+        self._base_url = base_url
+        self._login_button_text = login_button_text
+        self._auth_url_keywords = auth_url_keywords or _DEFAULT_AUTH_URL_KEYWORDS
+        self._modal_selectors = modal_selectors or _DEFAULT_MODAL_SELECTORS
+        self._cookie_file = f"{cookie_prefix}cookies.json" if cookie_prefix else self.COOKIE_FILE
 
     async def ensure_logged_in(self, page: Page) -> bool:
-        """Navigate to goofish and block until logged in with no modal open."""
-        await page.goto(BASE_URL, wait_until="load")
+        """Navigate to platform base URL and block until logged in."""
+        await page.goto(self._base_url, wait_until="load")
         await asyncio.sleep(3)
 
         if await self._is_logged_in(page):
@@ -38,14 +58,9 @@ class AuthManager:
         return await self._wait_until_logged_in(page)
 
     async def _is_logged_in(self, page: Page) -> bool:
-        """Return True only when:
-        1. URL is not an auth redirect
-        2. The '登录' button is NOT visible (meaning user is already signed in)
-        3. No login modal / popup is blocking the page
-        """
         try:
             url = page.url
-            if any(kw in url for kw in AUTH_URL_KEYWORDS):
+            if any(kw in url for kw in self._auth_url_keywords):
                 return False
             if await self._has_login_button(page):
                 return False
@@ -56,26 +71,15 @@ class AuthManager:
             return False
 
     async def _has_login_button(self, page: Page) -> bool:
-        """Check if the header '登录' link is visible (= not logged in)."""
         try:
-            loc = page.get_by_text("登录", exact=True).first
+            loc = page.get_by_text(self._login_button_text, exact=True).first
             return await loc.is_visible(timeout=1000)
         except Exception:
             return False
 
     async def _has_modal(self, page: Page) -> bool:
-        """Check if any login dialog / modal overlay is currently open."""
-        modal_selectors = (
-            '[class*="login"][class*="modal"]',
-            '[class*="login"][class*="dialog"]',
-            '[class*="login"][class*="popup"]',
-            '[class*="modal-mask"]',
-            '[class*="overlay"][class*="login"]',
-            '[class*="baxia"]',
-            'iframe[src*="login"]',
-        )
         try:
-            for sel in modal_selectors:
+            for sel in self._modal_selectors:
                 el = await page.query_selector(sel)
                 if el and await el.is_visible():
                     return True
@@ -107,11 +111,11 @@ class AuthManager:
         data = json.dumps(cookies, ensure_ascii=False)
         if self._crypto:
             data = self._crypto.encrypt(data)
-        Path(self.COOKIE_FILE).write_text(data, encoding="utf-8")
+        Path(self._cookie_file).write_text(data, encoding="utf-8")
         logger.debug("Cookies saved")
 
     async def load_cookies(self, context: BrowserContext) -> bool:
-        path = Path(self.COOKIE_FILE)
+        path = Path(self._cookie_file)
         if not path.exists():
             return False
         data = path.read_text(encoding="utf-8")

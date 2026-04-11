@@ -18,7 +18,7 @@ from goofish_agent.models.enums import CandidateStatus, ChatStatus, NegotiationS
 from goofish_agent.models.negotiation import NegotiationRecord
 from goofish_agent.models.task import Task
 from goofish_agent.goofish_platform.anti_detect import AntiDetect
-from goofish_agent.goofish_platform.client import GoofishClient
+from goofish_agent.platform.base import PlatformClient
 
 
 class Negotiator:
@@ -28,7 +28,7 @@ class Negotiator:
 
     def __init__(
         self,
-        client: GoofishClient,
+        client: PlatformClient,
         llm: LLMClient,
         market_analyzer: MarketAnalyzer,
         session: Session,
@@ -97,9 +97,10 @@ class Negotiator:
         task: Task,
     ) -> NegotiationRecord:
         market = await self._market.analyze(task.keywords, all_candidates, candidate.price)
+        platform_name = self._client.platform_display_name
         logger.info(
             f"[谈判] 市场分析数据: "
-            f"闲鱼行情={market.goofish or '暂无'} | "
+            f"{platform_name}行情={market.primary_platform or '暂无'} | "
             f"跨平台={market.cross_platform or '暂无'} | "
             f"卖家对比={market.seller_comparison or '暂无'}"
         )
@@ -111,7 +112,7 @@ class Negotiator:
             target_price=task.target_price,
             status=NegotiationStatus.IN_PROGRESS,
             market_reference={
-                "goofish": market.goofish,
+                "primary_platform": market.primary_platform,
                 "cross_platform": market.cross_platform,
                 "seller_comparison": market.seller_comparison,
             },
@@ -148,6 +149,7 @@ class Negotiator:
                 defects=defects,
                 market_data=record.market_reference,
                 chat_history=conv.messages,
+                platform_name=self._client.platform_display_name,
             )
             message = await self._llm.generate(NEGOTIATION_SYSTEM_PROMPT, prompt)
             logger.info(f"[谈判 第{round_num}轮] LLM生成谈判话术: {message[:200]}")

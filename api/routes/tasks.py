@@ -6,21 +6,20 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 from sqlmodel import select
 
 from goofish_agent.core.task_manager import TaskManager
-from goofish_agent.models.enums import ConditionGrade, NotificationChannel
+from goofish_agent.models.enums import ConditionGrade, NotificationChannel, PlatformType
 from goofish_agent.models.task import Task
 from goofish_agent.schemas.task import TaskCreate, TaskList, TaskResponse
 from goofish_agent.storage.database import get_session
 
 router = APIRouter()
 
-_task_manager: TaskManager | None = None
+_task_managers: dict[PlatformType, TaskManager] = {}
 
 
-def get_task_manager() -> TaskManager:
-    global _task_manager
-    if not _task_manager:
-        _task_manager = TaskManager()
-    return _task_manager
+def get_task_manager(platform: PlatformType) -> TaskManager:
+    if platform not in _task_managers:
+        _task_managers[platform] = TaskManager(platform)
+    return _task_managers[platform]
 
 
 @router.post("/", response_model=TaskResponse)
@@ -29,6 +28,7 @@ async def create_task(body: TaskCreate, background: BackgroundTasks) -> Task:
         task = Task(
             id=uuid4(),
             user_id=uuid4(),  # TODO: real user auth
+            platform=PlatformType(body.platform),
             keywords=body.keywords,
             min_price=body.min_price,
             max_price=body.max_price,
@@ -50,12 +50,12 @@ async def create_task(body: TaskCreate, background: BackgroundTasks) -> Task:
         session.commit()
         session.refresh(task)
 
-        background.add_task(_run_task, task.id)
+        background.add_task(_run_task, task.id, PlatformType(body.platform))
         return task
 
 
-async def _run_task(task_id: UUID) -> None:
-    mgr = get_task_manager()
+async def _run_task(task_id: UUID, platform: PlatformType) -> None:
+    mgr = get_task_manager(platform)
     await mgr.initialize()
     try:
         await mgr.run_task(task_id)
@@ -81,13 +81,21 @@ async def get_task(task_id: UUID) -> Task:
 
 @router.post("/{task_id}/pause")
 async def pause_task(task_id: UUID) -> dict[str, str]:
-    mgr = get_task_manager()
+    with get_session() as session:
+        task = session.get(Task, task_id)
+        if not task:
+            raise HTTPException(404, "Task not found")
+        mgr = get_task_manager(task.platform)
     await mgr.pause_task(task_id)
     return {"status": "paused"}
 
 
 @router.post("/{task_id}/cancel")
 async def cancel_task(task_id: UUID) -> dict[str, str]:
-    mgr = get_task_manager()
+    with get_session() as session:
+        task = session.get(Task, task_id)
+        if not task:
+            raise HTTPException(404, "Task not found")
+        mgr = get_task_manager(task.platform)
     await mgr.cancel_task(task_id)
     return {"status": "cancelled"}

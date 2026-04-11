@@ -1,6 +1,24 @@
 from enum import Enum
 
 
+class PlatformType(str, Enum):
+    GOOFISH = "goofish"
+    TAOBAO = "taobao"
+    JD = "jd"
+    PDD = "pdd"
+    CUSTOM = "custom"
+
+    @property
+    def display_name(self) -> str:
+        return {
+            PlatformType.GOOFISH: "闲鱼",
+            PlatformType.TAOBAO: "淘宝二手",
+            PlatformType.JD: "京东二手",
+            PlatformType.PDD: "拼多多二手",
+            PlatformType.CUSTOM: "自定义平台",
+        }[self]
+
+
 class TaskStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"

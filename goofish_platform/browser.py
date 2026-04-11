@@ -11,11 +11,15 @@ class BrowserEngine:
         headless: bool | None = None,
         data_dir: str | None = None,
         proxy: str | None = None,
+        locale: str = "zh-CN",
+        timezone_id: str = "Asia/Shanghai",
     ) -> None:
         s = get_settings()
         self._headless = headless if headless is not None else s.browser_headless
         self._data_dir = data_dir or s.browser_data_dir
         self._proxy = proxy or s.proxy_server
+        self._locale = locale
+        self._timezone_id = timezone_id
         self._playwright = None
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
@@ -27,8 +31,8 @@ class BrowserEngine:
             headless=self._headless,
             proxy={"server": self._proxy} if self._proxy else None,
             viewport={"width": 1366, "height": 768},
-            locale="zh-CN",
-            timezone_id="Asia/Shanghai",
+            locale=self._locale,
+            timezone_id=self._timezone_id,
         )
         return self._context
 

@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 
 class TaskCreate(BaseModel):
+    platform: str
     keywords: str
     max_price: float
     target_price: float
@@ -25,6 +26,7 @@ class TaskCreate(BaseModel):
 
 class TaskResponse(BaseModel):
     id: UUID
+    platform: str
     keywords: str
     status: str
     current_phase: str | None

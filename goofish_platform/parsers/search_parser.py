@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlparse
 
 from loguru import logger
 from playwright.async_api import Page
+
+if TYPE_CHECKING:
+    from goofish_agent.platform.base import PlatformConfig
 
 
 @dataclass
@@ -21,7 +25,12 @@ class ProductBrief:
 
 def _extract_id_from_href(href: str) -> str:
     qs = parse_qs(urlparse(href).query)
-    return qs.get("id", [""])[0]
+    pid = qs.get("id", [""])[0] or qs.get("goods_id", [""])[0]
+    if pid:
+        return pid
+    # Fallback: try to extract numeric id from path (e.g. /12345.html)
+    m = re.search(r"/(\d{5,})(?:\.html)?", urlparse(href).path)
+    return m.group(1) if m else ""
 
 
 def _parse_price(text: str) -> float:
@@ -30,21 +39,22 @@ def _parse_price(text: str) -> float:
 
 
 class SearchParser:
-    PRODUCT_LINK_SELECTOR = 'a[href*="/item?id="]'
     RESULTS_TIMEOUT_MS = 15_000
 
     @staticmethod
-    async def parse(page: Page) -> list[ProductBrief]:
+    async def parse(page: Page, config: PlatformConfig | None = None) -> list[ProductBrief]:
+        link_selector = config.product_link_selector if config else 'a[href*="/item?id="]'
+
         try:
             await page.wait_for_selector(
-                SearchParser.PRODUCT_LINK_SELECTOR,
+                link_selector,
                 timeout=SearchParser.RESULTS_TIMEOUT_MS,
             )
         except Exception:
             logger.warning("搜索结果加载超时或无结果")
             return []
 
-        links = await page.query_selector_all(SearchParser.PRODUCT_LINK_SELECTOR)
+        links = await page.query_selector_all(link_selector)
         logger.debug(f"搜索页找到 {len(links)} 个商品链接")
 
         results: list[ProductBrief] = []
@@ -90,6 +100,11 @@ class SearchParser:
                 if seller_el:
                     seller_name = (await seller_el.inner_text()).strip()
 
+                if config:
+                    product_url = config.item_url_template.format(product_id=product_id)
+                else:
+                    product_url = f"https://www.goofish.com/item?id={product_id}"
+
                 results.append(
                     ProductBrief(
                         product_id=product_id,
@@ -97,7 +112,7 @@ class SearchParser:
                         price=price,
                         image_url=image_url,
                         seller_name=seller_name,
-                        product_url=f"https://www.goofish.com/item?id={product_id}",
+                        product_url=product_url,
                     )
                 )
             except Exception:

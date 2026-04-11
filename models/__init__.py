@@ -4,6 +4,7 @@ from .enums import (
     ConditionGrade,
     NegotiationStatus,
     NotificationChannel,
+    PlatformType,
     TaskPhase,
     TaskStatus,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "ConditionGrade",
     "NegotiationStatus",
     "NotificationChannel",
+    "PlatformType",
     "TaskPhase",
     "TaskStatus",
     "Task",

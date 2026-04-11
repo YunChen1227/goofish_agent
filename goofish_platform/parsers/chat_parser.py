@@ -13,7 +13,7 @@ class ChatMessage:
 
 
 class ChatParser:
-    # TODO: adapt selectors to actual Goofish page structure
+    # TODO: adapt selectors to actual platform page structure
 
     @staticmethod
     async def parse_messages(page: Page) -> list[ChatMessage]:

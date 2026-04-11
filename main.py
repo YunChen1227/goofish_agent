@@ -8,10 +8,16 @@ from uuid import UUID, uuid4
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="闲鱼买家 Agent")
+    parser = argparse.ArgumentParser(description="二手平台买家 Agent（支持闲鱼/淘宝/京东/拼多多等）")
     sub = parser.add_subparsers(dest="command")
 
     run_p = sub.add_parser("run", help="运行购买任务")
+    run_p.add_argument(
+        "--platform",
+        choices=["goofish", "taobao", "jd", "pdd", "custom"],
+        default=None,
+        help="目标平台；与 JSON 配置二选一必填（CLI 优先于配置文件中的 platform）",
+    )
     run_p.add_argument("--keywords", required=True, help="搜索关键词")
     run_p.add_argument("--max-price", type=float, required=True)
     run_p.add_argument("--target-price", type=float, required=True)
@@ -45,18 +51,29 @@ async def run_task(args: argparse.Namespace) -> None:
             config = json.load(f)
 
     from goofish_agent.core.task_manager import TaskManager
-    from goofish_agent.models.enums import ConditionGrade
+    from goofish_agent.models.enums import ConditionGrade, PlatformType
     from goofish_agent.models.task import Task
+
+    platform_str = args.platform or config.get("platform")
+    if not platform_str:
+        print(
+            "错误：必须显式指定平台：使用 --platform <goofish|taobao|jd|pdd|custom>，"
+            "或在 JSON 配置中设置 \"platform\" 字段。",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    platform = PlatformType(platform_str)
 
     known_keys = {
         "keywords", "max_price", "target_price", "condition",
-        "location", "reference_images",
+        "location", "reference_images", "platform",
     }
 
     with get_session() as session:
         task = Task(
             id=uuid4(),
             user_id=uuid4(),
+            platform=platform,
             keywords=config.get("keywords", args.keywords),
             max_price=config.get("max_price", args.max_price),
             target_price=config.get("target_price", args.target_price),
@@ -73,7 +90,7 @@ async def run_task(args: argparse.Namespace) -> None:
         session.commit()
         task_id: UUID = task.id
 
-    mgr = TaskManager()
+    mgr = TaskManager(platform)
     await mgr.initialize()
     try:
         await mgr.run_task(task_id)

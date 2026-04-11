@@ -13,6 +13,7 @@ from goofish_agent.models.enums import (
     CandidateStatus,
     ChatStatus,
     NegotiationStatus,
+    PlatformType,
     TaskStatus,
 )
 from goofish_agent.models.task import Task
@@ -22,21 +23,22 @@ from goofish_agent.modules.favoriter import Favoriter
 from goofish_agent.modules.negotiator import Negotiator
 from goofish_agent.modules.notifier import Notifier
 from goofish_agent.modules.searcher import Searcher
-from goofish_agent.goofish_platform.client import GoofishClient
+from goofish_agent.platform import PlatformClient, create_platform_client
 from goofish_agent.storage.database import get_session
 from goofish_agent.storage.media_store import MediaStore
 
 
 class TaskManager:
-    def __init__(self) -> None:
-        self._client: GoofishClient | None = None
+    def __init__(self, platform: PlatformType) -> None:
+        self._platform = platform
+        self._client: PlatformClient | None = None
         self._vlm: VLMClient | None = None
         self._llm: LLMClient | None = None
         self._market: MarketAnalyzer | None = None
         self._media: MediaStore | None = None
 
     async def initialize(self) -> None:
-        self._client = GoofishClient()
+        self._client = create_platform_client(self._platform)
         self._vlm = VLMClient()
         self._llm = LLMClient()
         self._market = MarketAnalyzer(self._client)

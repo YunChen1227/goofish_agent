@@ -9,14 +9,14 @@ from sqlmodel import Session
 from goofish_agent.ai.vlm_client import VLMClient
 from goofish_agent.models.candidate import ProductCandidate
 from goofish_agent.models.task import Task
-from goofish_agent.goofish_platform.client import GoofishClient
 from goofish_agent.goofish_platform.parsers.detail_parser import ProductDetail
+from goofish_agent.platform.base import PlatformClient
 
 
 class Searcher:
     """Phase 1: Search, filter, optional image matching, and initial scoring."""
 
-    def __init__(self, client: GoofishClient, vlm: VLMClient, session: Session) -> None:
+    def __init__(self, client: PlatformClient, vlm: VLMClient, session: Session) -> None:
         self._client = client
         self._vlm = vlm
         self._session = session

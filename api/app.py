@@ -14,7 +14,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title="Goofish Buyer Agent", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Marketplace Buyer Agent", version="1.0.0", lifespan=lifespan)
 
 from goofish_agent.api.routes import results, tasks  # noqa: E402
 

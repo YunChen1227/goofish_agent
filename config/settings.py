@@ -4,7 +4,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="GOOFISH_", env_file=".env")
+    model_config = SettingsConfigDict(
+        env_prefix="BUYER_AGENT_",
+        env_file=".env",
+        # Keep backward compatibility: also read GOOFISH_ prefixed vars
+        extra="ignore",
+    )
 
     # LLM
     llm_model: str = "qwen3.5-plus"
@@ -17,7 +22,7 @@ class Settings(BaseSettings):
     vlm_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
     # Database
-    database_url: str = "sqlite:///goofish_agent.db"
+    database_url: str = "sqlite:///buyer_agent.db"
 
     # Browser
     browser_headless: bool = False
