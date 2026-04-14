@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import random
 import re
 from datetime import datetime, timezone
@@ -9,6 +10,7 @@ from uuid import uuid4
 from loguru import logger
 from sqlmodel import Session
 
+from goofish_agent.ai.keyword_optimizer import KeywordOptimizer, OptimizationResult
 from goofish_agent.ai.llm_client import LLMClient
 from goofish_agent.ai.vlm_client import VLMClient
 from goofish_agent.models.candidate import ProductCandidate
@@ -17,22 +19,11 @@ from goofish_agent.goofish_platform.parsers.detail_parser import ProductDetail
 from goofish_agent.goofish_platform.parsers.search_parser import ProductBrief
 from goofish_agent.platform.base import PlatformClient
 
-KEYWORD_OPTIMIZE_PROMPT = (
-    "你是一个二手商品搜索优化助手。用户在二手平台搜索商品，但搜索结果与期望不符。\n"
-    "请根据用户的原始搜索关键词和搜索结果中的商品标题，分析不匹配的原因，"
-    "并给出一个更优的搜索关键词。\n\n"
-    "要求：\n"
-    "1. 只返回优化后的搜索关键词，不要包含任何解释\n"
-    "2. 关键词应该更准确地描述用户想要购买的商品\n"
-    "3. 去掉可能导致搜索偏差的冗余词或错别字\n"
-    "4. 保留核心商品特征词"
-)
-
 
 class Searcher:
     """Phase 1: Search, filter, optional image matching, and initial scoring."""
 
-    MAX_KEYWORD_OPTIMIZE_RETRIES = 2
+    MAX_KEYWORD_OPTIMIZE_RETRIES = 3
     MISMATCH_THRESHOLD = 0.8
 
     def __init__(
@@ -41,6 +32,7 @@ class Searcher:
         self._client = client
         self._vlm = vlm
         self._llm = llm
+        self._optimizer = KeywordOptimizer(llm)
         self._session = session
 
     async def execute(self, task: Task) -> list[ProductCandidate]:
@@ -51,74 +43,7 @@ class Searcher:
             f"排除关键词: {task.exclude_keywords or '无'}"
         )
 
-        current_keywords = task.keywords
-        briefs: list[ProductBrief] = []
-
-        for attempt in range(1 + self.MAX_KEYWORD_OPTIMIZE_RETRIES):
-            briefs = await self._client.search(current_keywords, self._build_filters(task))
-            logger.info(f"[搜索] 搜索到 {len(briefs)} 个结果")
-
-            need_optimize = False
-            optimize_reason = ""
-
-            if not briefs:
-                logger.warning(f"[搜索] 关键词 '{current_keywords}' 无搜索结果")
-                need_optimize = True
-                optimize_reason = "搜索结果为空"
-            else:
-                mismatch_rate, matched, mismatched = self._check_keyword_relevance(
-                    briefs, current_keywords
-                )
-                logger.info(
-                    f"[搜索-预筛选] 关键词相关性检查: "
-                    f"匹配 {len(matched)}/{len(briefs)} | "
-                    f"不匹配 {len(mismatched)}/{len(briefs)} | "
-                    f"不匹配率: {mismatch_rate:.0%}"
-                )
-                if mismatch_rate >= self.MISMATCH_THRESHOLD:
-                    need_optimize = True
-                    optimize_reason = (
-                        f"搜索结果中 {mismatch_rate:.0%} 的商品标题与关键词不匹配"
-                    )
-
-            if not need_optimize:
-                break
-
-            if attempt < self.MAX_KEYWORD_OPTIMIZE_RETRIES:
-                sample_titles = [b.title for b in briefs[:15] if b.title]
-                optimized = await self._optimize_keywords(
-                    current_keywords, sample_titles
-                )
-                if optimized and optimized != current_keywords:
-                    mismatched_examples = (
-                        [t.title for t in mismatched[:3]] if briefs else []
-                    )
-                    logger.warning(
-                        f"[搜索-关键词优化] {optimize_reason}，"
-                        f"触发关键词优化（第 {attempt + 1} 次）\n"
-                        f"  原始关键词: '{current_keywords}'\n"
-                        f"  优化关键词: '{optimized}'"
-                        + (
-                            f"\n  不匹配示例: {mismatched_examples}"
-                            if mismatched_examples
-                            else ""
-                        )
-                    )
-                    current_keywords = optimized
-                    delay = random.uniform(5, 10)
-                    logger.info(f"[搜索-反爬] 等待 {delay:.1f}s 后使用新关键词重新搜索...")
-                    await asyncio.sleep(delay)
-                    continue
-                else:
-                    logger.info("[搜索-关键词优化] 大模型未能给出不同的优化关键词，使用当前结果继续")
-                    break
-            else:
-                logger.info(
-                    f"[搜索-关键词优化] 已达最大优化次数 ({self.MAX_KEYWORD_OPTIMIZE_RETRIES})，使用当前结果继续"
-                )
-
-        if current_keywords != task.keywords:
-            logger.info(f"[搜索] 最终使用关键词: '{current_keywords}'（原始: '{task.keywords}'）")
+        briefs = await self._smart_search(task)
 
         logger.info(f"[搜索] 共 {len(briefs)} 个结果，开始逐一检查")
 
@@ -167,48 +92,177 @@ class Searcher:
         logger.info(f"Phase 1 完成: {len(candidates)} 个候选商品")
         return candidates
 
-    @staticmethod
-    def _check_keyword_relevance(
-        briefs: list[ProductBrief], keywords: str
+    async def _smart_search(self, task: Task) -> list[ProductBrief]:
+        """Search with agent-powered keyword optimization and up to
+        MAX_KEYWORD_OPTIMIZE_RETRIES retry rounds."""
+        current_keywords = task.keywords
+        optimization_history: list[OptimizationResult] = []
+        briefs: list[ProductBrief] = []
+
+        for attempt in range(1 + self.MAX_KEYWORD_OPTIMIZE_RETRIES):
+            briefs = await self._client.search(
+                current_keywords, self._build_filters(task)
+            )
+            logger.info(f"[搜索] 搜索到 {len(briefs)} 个结果 (关键词: '{current_keywords}')")
+
+            if not briefs:
+                logger.warning(f"[搜索] 关键词 '{current_keywords}' 无搜索结果")
+            else:
+                mismatch_rate, matched, mismatched = await self._check_relevance_llm(
+                    briefs, task.keywords
+                )
+                logger.info(
+                    f"[搜索-预筛选] 大模型相关性判定: "
+                    f"相关 {len(matched)}/{len(briefs)} | "
+                    f"不相关 {len(mismatched)}/{len(briefs)} | "
+                    f"不相关率: {mismatch_rate:.0%}"
+                )
+                if mismatch_rate < self.MISMATCH_THRESHOLD:
+                    break
+
+            if attempt >= self.MAX_KEYWORD_OPTIMIZE_RETRIES:
+                logger.info(
+                    f"[搜索-关键词优化] 已达最大优化次数 "
+                    f"({self.MAX_KEYWORD_OPTIMIZE_RETRIES})，使用当前结果继续"
+                )
+                break
+
+            sample_titles = [b.title for b in briefs[:15] if b.title]
+            opt_result = await self._optimizer.optimize(
+                original_keywords=task.keywords,
+                sample_titles=sample_titles or None,
+                search_history=optimization_history or None,
+            )
+            optimization_history.append(opt_result)
+
+            if (
+                opt_result.optimized_keywords
+                and opt_result.optimized_keywords != current_keywords
+            ):
+                logger.warning(
+                    f"[搜索-关键词优化] 触发关键词优化（第 {attempt + 1}/{self.MAX_KEYWORD_OPTIMIZE_RETRIES} 次）\n"
+                    f"  '{current_keywords}' → '{opt_result.optimized_keywords}'"
+                )
+                current_keywords = opt_result.optimized_keywords
+                delay = random.uniform(5, 10)
+                logger.info(
+                    f"[搜索-反爬] 等待 {delay:.1f}s 后使用新关键词重新搜索..."
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.info(
+                    "[搜索-关键词优化] Agent 未能给出不同的优化关键词，使用当前结果继续"
+                )
+                break
+
+        if current_keywords != task.keywords:
+            logger.info(
+                f"[搜索] 最终使用关键词: '{current_keywords}'（原始: '{task.keywords}'）"
+            )
+
+        return briefs
+
+    async def _check_relevance_llm(
+        self,
+        briefs: list[ProductBrief],
+        user_keywords: str,
     ) -> tuple[float, list[ProductBrief], list[ProductBrief]]:
-        tokens = re.split(r'[\s/\\|,，、]+', keywords)
-        tokens = [t.lower() for t in tokens if len(t) >= 2]
-        if not tokens:
-            tokens = [keywords.lower().strip()]
+        """Use LLM to judge relevance of each product title against the user's
+        original search intent.  Returns (mismatch_rate, matched, mismatched)."""
+        sample = briefs[:20]
+        titles_block = "\n".join(
+            f"  {i}. {b.title}" for i, b in enumerate(sample, 1)
+        )
+
+        system_prompt = (
+            "你是一个商品搜索相关性判定助手。用户想购买某个商品，给你一批搜索结果的标题。\n"
+            "请判断每个标题是否与用户的搜索意图相关。\n\n"
+            "规则：\n"
+            "1. 理解用户搜索关键词背后的真实购买意图（可能包含缩写、行话、错别字）\n"
+            "2. 标题不需要完全包含关键词，只要商品本身与用户想买的东西相关即可判定为「相关」\n"
+            "3. 完全不同品类的商品判定为「不相关」\n\n"
+            "请严格按以下 JSON 格式输出，不要输出任何其他内容：\n"
+            '{"intent": "一句话描述用户想买什么", '
+            '"results": [{"id": 1, "relevant": true/false, "reason": "简短理由"}, ...]}'
+        )
+
+        user_message = (
+            f"用户搜索关键词: {user_keywords}\n\n"
+            f"搜索结果标题列表:\n{titles_block}"
+        )
+
+        try:
+            raw = await self._llm.generate(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                temperature=0.1,
+            )
+            relevant_ids = self._parse_relevance_response(raw, len(sample))
+        except Exception as e:
+            logger.warning(f"[搜索-预筛选] 大模型相关性判定失败 ({e})，回退到全部保留")
+            return 0.0, list(briefs), []
 
         matched: list[ProductBrief] = []
         mismatched: list[ProductBrief] = []
-        for brief in briefs:
-            title_lower = brief.title.lower()
-            if any(tok in title_lower for tok in tokens):
+        for i, brief in enumerate(sample):
+            is_relevant = relevant_ids.get(i + 1, True)
+            if is_relevant:
                 matched.append(brief)
             else:
                 mismatched.append(brief)
+                logger.debug(f"  [不相关] {brief.title}")
+
+        remaining = briefs[len(sample):]
+        if matched:
+            matched.extend(remaining)
+        else:
+            mismatched.extend(remaining)
 
         mismatch_rate = len(mismatched) / len(briefs) if briefs else 0.0
         return mismatch_rate, matched, mismatched
 
-    async def _optimize_keywords(
-        self, original_keywords: str, sample_titles: list[str]
-    ) -> str:
-        titles_text = "\n".join(f"  - {t}" for t in sample_titles)
-        user_message = (
-            f"原始搜索关键词: {original_keywords}\n\n"
-            f"搜索结果中的商品标题（样本）:\n{titles_text}\n\n"
-            f"请给出优化后的搜索关键词:"
-        )
+    @staticmethod
+    def _parse_relevance_response(raw: str, count: int) -> dict[int, bool]:
+        """Parse LLM relevance judgement into {id: bool} mapping."""
+        result: dict[int, bool] = {}
+
+        text = raw.strip()
+        text = re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
+        md = re.search(r"```(?:json)?\s*\n?([\s\S]*?)```", text)
+        if md:
+            text = md.group(1).strip()
+
+        start = text.find("{")
+        if start == -1:
+            return result
+        depth = 0
+        for i in range(start, len(text)):
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    text = text[start : i + 1]
+                    break
+
+        text = text.replace("\u201c", '"').replace("\u201d", '"')
+
         try:
-            result = await self._llm.generate(
-                system_prompt=KEYWORD_OPTIMIZE_PROMPT,
-                user_message=user_message,
-                temperature=0.3,
-            )
-            optimized = result.strip().strip('"\'')
-            if optimized:
-                return optimized
-        except Exception as e:
-            logger.error(f"[搜索-关键词优化] 调用大模型失败: {e}")
-        return original_keywords
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            for m in re.finditer(
+                r'"id"\s*:\s*(\d+)\s*,\s*"relevant"\s*:\s*(true|false)', text, re.I
+            ):
+                result[int(m.group(1))] = m.group(2).lower() == "true"
+            return result
+
+        for item in data.get("results", []):
+            item_id = item.get("id")
+            relevant = item.get("relevant")
+            if isinstance(item_id, int) and isinstance(relevant, bool):
+                result[item_id] = relevant
+
+        return result
 
     def _build_filters(self, task: Task) -> dict:
         return {
