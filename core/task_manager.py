@@ -112,7 +112,7 @@ class TaskManager:
         session.commit()
         await notifier.notify_progress(task, "搜索", "开始搜索商品...")
 
-        searcher = Searcher(self._client, self._vlm, session)
+        searcher = Searcher(self._client, self._vlm, self._llm, session)
         candidates = await searcher.execute(task)
         if not candidates:
             StateMachine.transition(task, TaskStatus.FAILED)
