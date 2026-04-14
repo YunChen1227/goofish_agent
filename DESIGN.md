@@ -2,7 +2,7 @@
 
 ## 1. 项目概述
 
-本项目是一个面向闲鱼（Goofish）二手交易平台的自动化买家代理。用户提交购买需求后，Agent 自动完成「搜索 → 品相鉴定 → 收藏 → 卖家沟通 → 价格谈判 → 结果通知」全链路流程，最大限度减少用户在二手淘货中的时间与精力消耗。
+本项目是一个面向 **闲鱼（Goofish）及多平台二手入口**（淘宝/京东/拼多多等，通过统一 `PlatformClient` + 各平台 `PlatformConfig` 驱动同一套 Playwright 客户端）的自动化买家代理。用户提交购买需求后，Agent 自动完成「搜索 → 品相鉴定 → 收藏 → 卖家沟通 → 价格谈判 → 结果通知」全链路流程，最大限度减少用户在二手淘货中的时间与精力消耗。
 
 **目标用户**: 有明确购买意向但没有时间逐一筛选、比价、聊天的二手买家。
 
@@ -19,7 +19,7 @@
 
 | # | 功能 | 描述 |
 |---|------|------|
-| F1 | **商品搜索与筛选** | 根据用户设定的关键词、价格区间、地域等条件，在闲鱼平台搜索商品；支持用户提供参考图片，通过多模态模型将商品图片与参考图片进行视觉对照，筛选出外观最匹配的商品；并按相关性/价格/发布时间等维度排序筛选 |
+| F1 | **商品搜索与筛选** | 多平台搜索；列表页经 **LLM 判定标题与用户搜索意图相关性**，必要时 **KeywordOptimizer** 重写查询；详情阶段价格/排除词/信用过滤；可选 **VLM 参考图匹配** 与初筛打分 |
 | F2 | **品相智能鉴定** | 利用多模态视觉模型分析商品的图片与视频，评估外观磨损、功能完好度、是否与描述相符，输出品相评分与缺陷报告 |
 | F3 | **收藏与候选管理** | 将通过品相鉴定的商品自动加入闲鱼收藏夹，同时在本地维护一份候选商品列表，记录评估结果 |
 | F4 | **卖家自动沟通** | 对候选商品发起与卖家的聊天对话，进一步确认品相细节（如隐藏瑕疵、配件齐全度、保修情况等） |
@@ -60,12 +60,10 @@
 │               平台交互层 (Platform Adapter)                │
 │                                                           │
 │  ┌─────────────────────────────────────────────────────┐  │
-│  │           GoofishClient (闲鱼平台客户端)               │  │
-│  │  - 登录与会话管理                                     │  │
-│  │  - 搜索 API / 页面抓取                                │  │
-│  │  - 商品详情获取                                       │  │
-│  │  - 收藏操作                                           │  │
-│  │  - 聊天消息收发                                       │  │
+│  │  GoofishClient（goofish_platform/client.py）           │  │
+│  │  - 实现 PlatformClient；多平台共用 PlatformConfig       │  │
+│  │  - 登录与会话、搜索/详情、限流与反爬暂停               │  │
+│  │  - 收藏 / 聊天等（部分占位或简化）                     │  │
 │  └─────────────────────────────────────────────────────┘  │
 │                                                           │
 │  ┌───────────────┐  ┌──────────────────────────────────┐  │
@@ -79,10 +77,10 @@
 │                    AI 能力层 (AI Layer)                    │
 │                                                           │
 │  ┌──────────────────┐  ┌───────────────────────────────┐  │
-│  │ 视觉评估模型       │  │ 对话生成模型 (LLM)             │  │
-│  │ (Multimodal VLM) │  │ - 卖家沟通话术                  │  │
-│  │ - 品相评分        │  │ - 谈判策略执行                  │  │
-│  │ - 缺陷识别        │  │ - 意图理解与回复                │  │
+│  │ 视觉评估模型       │  │ 文本模型 (LLM)                 │  │
+│  │ (Multimodal VLM) │  │ - 搜索标题相关性判定           │  │
+│  │ - 品相评分        │  │ - KeywordOptimizer 关键词 Agent│  │
+│  │ - 缺陷识别        │  │ - 卖家沟通 / 谈判话术          │  │
 │  │ - 参考图片对照    │  │                                │  │
 │  └──────────────────┘  └───────────────────────────────┘  │
 │                                                           │
@@ -152,9 +150,30 @@ Agent 统一使用以下品相等级体系对商品进行评估：
 | 有瑕疵 | `FAIR` | 5 | 有可见损伤但核心功能正常 |
 | 较差 | `POOR` | 4 | 明显损伤，部分功能受影响 |
 
+### 4.4 CLI 与任务表字段补充
+
+- **入口**：`python -m goofish_agent.main run --platform goofish|taobao|jd|pdd|custom --keywords ... --max-price ... --target-price ...`，可选 `--reference-images`、`--config` JSON。
+- **Task.platform**：与 CLI `--platform` 对应，决定 `PlatformConfig`（搜索/详情 URL 与列表页 CSS 选择器）。
+- **数据库**：默认 `sqlite:///buyer_agent.db`（`BUYER_AGENT_DATABASE_URL` 可覆盖）。
+- **模型与密钥**：`BUYER_AGENT_LLM_*` / `BUYER_AGENT_VLM_*`（OpenAI 兼容端点，默认 DashScope compatible-mode）。
+
 ---
 
 ## 5. Agent 工作流
+
+### 5.0 编排与状态 (`core/task_manager.py` + `core/state_machine.py`)
+
+- **`TaskManager.initialize()`**：`create_platform_client(platform)` → `VLMClient` / `LLMClient` / `MarketAnalyzer` / `MediaStore` → `await client.start()`。
+- **`run_task(task_id)`**：`get_session` 取 `Task` → `StateMachine.transition(RUNNING)` → `_execute_phases`。
+- **`_execute_phases` 顺序**（每步 `StateMachine.advance_phase` + `session.commit`）:
+  1. `Notifier.notify_progress` → `Searcher(client, vlm, llm, session).execute(task)`
+  2. 无候选 → `FAILED` + `notify_failure({"filtered": 0})`
+  3. `Assessor(vlm, media, session).execute` → 无 `ACTIVE` → `FAILED` + `assessment_rejected`
+  4. `Favoriter.execute` → `notify_progress`
+  5. `Chatter(client, llm, session).execute` → 无 `ChatStatus.READY` → `FAILED` + `chat_failed`
+  6. `Negotiator(client, llm, market, session).execute`
+  7. 有 `NegotiationStatus.AGREED` → `notify_deal` + `COMPLETED`；否则 `notify_failure` + `FAILED`
+- **`StateMachine`**：`VALID_TRANSITIONS` 约束 `TaskStatus`；`PHASE_ORDER` 为 SEARCHING → … → NOTIFYING；`advance_phase` 在 `current_phase is None` 时置为第一阶段。
 
 ### 5.1 整体流程
 
@@ -199,31 +218,62 @@ Agent 统一使用以下品相等级体系对商品进行评估：
  └─────────────┘
 ```
 
-### 5.2 Phase 1: 搜索与初筛
+### 5.2 Phase 1: 搜索与初筛（与 `modules/searcher.py` 一致）
 
-**输入**: 用户配置的搜索参数
-**输出**: 候选商品列表 `List[ProductCandidate]`
+**输入**: `Task`（含 `platform`、`keywords`、价格区间、`exclude_keywords`、`reference_images` 等）  
+**输出**: 持久化后的 `List[ProductCandidate]`（写入数据库）
 
-**执行步骤**:
+**整体子流程**（`Searcher.execute` → `_smart_search` → 详情拉取 → 可选图匹配 → 打分排序）:
 
-1. 使用 `keywords` 在闲鱼平台发起搜索
-2. 应用价格区间过滤 (`min_price` ~ `max_price`)
-3. 应用地域过滤 (`location`)
-4. 排除包含 `exclude_keywords` 的商品
-5. 按综合排序（相关性 × 价格合理度 × 卖家信用）取 top `max_candidates` 条
-6. 对每个候选商品获取详情页信息（标题、描述、价格、图片列表、视频、卖家信息）
-7. 若用户提供了 `reference_images`，执行**图片对照筛选**:
-   - 将用户参考图片与每个候选商品的图片一起提交给多模态视觉模型
-   - 模型从外观、型号、颜色、款式、配置等维度评估商品与参考图片的匹配程度，输出匹配度评分 (`image_match_score`, 0-1)
-   - 过滤掉 `image_match_score` 低于 `image_match_threshold` 的商品
-   - 将 `image_match_score` 作为后续综合排序的加权因子
+```
+Smart Search 循环（最多 1 + 3 轮平台搜索）
+  │
+  +--> PlatformClient.search(query, filters)
+  |    filters = { min_price, max_price, location }
+  |    （列表页以平台为准；硬过滤主要在详情阶段）
+  |
+  +--> SearchParser.parse
+  |    · 若仅为「猜你喜欢」推荐流 → 视为 0 条真实结果
+  |    · 超时 / 风控 / 登录页 → 诊断日志 + 空列表
+  |
+  +--> 若有结果：LLM 标题相关性判定（_check_relevance_llm）
+  │     · 取最多20 条标题 + 用户原始 task.keywords
+  │     · 模型输出 JSON：每条 id 是否 relevant + 理由
+  │     · 计算「不相关率」；若 < 80% → 本阶段搜索成功，跳出循环
+  │
+  +--> 若空结果或不相关率 >= 80%：KeywordOptimizer（ai/keyword_optimizer.py）
+  │     · 结构化 JSON：意图分析 / 词拆解 / 多策略 / coverage_check.recommendation
+  │     · 日志打印完整推理链；解析失败有多层兜底，不向平台提交整段 JSON
+  │     · 新关键词与当前不同时：随机等待 5–10s 再搜（降低反爬）
+  │
+  └─► 达3 次优化仍不理想 → 以最后一轮 briefs 继续后续（可能为空）
 
-**初筛规则**:
-- 价格严格在 `[min_price, max_price]` 范围内
-- 若配置 `seller_min_credit`，卖家信用低于该值的直接过滤
-- 若配置 `prefer_verified`，优先排序有官方验货标识的商品
-- 商品描述中包含 `exclude_keywords` 的直接过滤
-- 若配置 `reference_images`，商品图片与参考图片的匹配度低于 `image_match_threshold` 的直接过滤
+详情与规则过滤（最多尝试 10 个商品详情，遍历 briefs[:max_candidates]）
+  │
+  +--> get_product_detail -> ProductDetail
+  +--> 价格 ∈ [min_price, max_price]
+  +--> 标题+描述不含 exclude_keywords
+  └─► seller_min_credit（若配置）
+
+参考图（若 task.reference_images 非空）
+  │
+  └─► VLM match_images（最多 3 张商品图 vs 参考图）→ image_match_score
+      · ≥ image_match_threshold 保留，否则淘汰
+
+初筛打分 initial_score（Searcher._score_and_sort，与 settings 权重设计不同，代码侧为简化公式）
+  │
+  · 无参考图：0.4×价格分 + 0.3×信用分 + 0.3
+  · 有参考图：0.3×价格分 + 0.2×信用分 + 0.3×image_match + 0.2
+  · 价格分：相对 target_price ~ max_price 线性归一化
+
+最后 session.add 全部候选并 commit。
+```
+
+**初筛规则（代码实际执行）**:
+- 搜索页：不做简单子串匹配；**相关性由 LLM 对标题批量判定**。
+- 详情页：价格区间、`exclude_keywords`、`seller_min_credit`。
+- 参考图：`image_match_threshold` 过滤 +参与 `initial_score`。
+- `prefer_verified`：模型字段存在，Searcher 内未单独分支（可后续接入）。
 
 ### 5.3 Phase 2: 品相鉴定
 
@@ -406,62 +456,66 @@ Agent 在进入谈判前，通过多渠道采集价格数据，构建全面的�
 
 ## 6. 核心模块设计
 
-### 6.1 平台交互层 (GoofishClient)
+### 6.1 平台抽象与客户端 (`platform/` + `goofish_platform/`)
 
-统一封装所有与闲鱼平台的交互操作，向上层模块提供稳定的接口。
+**抽象接口** (`platform/base.py`):
 
-**职责**:
-- 管理浏览器实例的生命周期 (启动、保活、销毁)
-- 管理用户登录会话 (Cookie 持久化、登录态检测、自动重登)
-- 提供搜索、详情获取、收藏、聊天等高层操作接口
-- 封装反检测机制，对上层模块透明
+- `PlatformConfig`: `name`, `display_name`, `base_url`, `search_url_template`, `item_url_template`, `product_link_selector`, `locale`, `timezone_id`, 登录相关文案与弹层选择器等。
+- 内置配置：`GOOFISH_CONFIG`、`TAOBAO_CONFIG`、`JD_CONFIG`、`PDD_CONFIG`（键为 `goofish` / `taobao` / `jd` / `pdd`）。
+- `PlatformClient`（抽象）方法：
+  - `start()` / `close()`
+  - `search(query, filters?) -> list[ProductBrief]`
+  - `get_product_detail(product_id) -> ProductDetail | None`
+  - `get_product_media(product_id) -> list[str]`（当前实现为再拉详情取图）
+  - `add_to_favorites` / `send_message` / `get_messages` / `get_seller_info`
 
-**核心接口**:
+**工厂** (`platform/__init__.py`): `create_platform_client(platform: PlatformType)` — 闲鱼用默认配置，其余平台复用同一 `GoofishClient` 类但注入对应 `PlatformConfig`（通用 Playwright 抓取）。
 
-| 方法 | 参数 | 返回 | 说明 |
-|------|------|------|------|
-| `login()` | credentials | Session | 登录闲鱼并持久化会话 |
-| `search(query, filters)` | 关键词+筛选条件 | List[ProductBrief] | 搜索商品列表 |
-| `get_product_detail(product_id)` | 商品ID | ProductDetail | 获取商品完整详情 |
-| `get_product_media(product_id)` | 商品ID | List[MediaFile] | 下载商品图片/视频 |
-| `add_to_favorites(product_id)` | 商品ID | bool | 加入收藏 |
-| `send_message(seller_id, message)` | 卖家ID+消息 | bool | 发送私信 |
-| `get_messages(conversation_id)` | 会话ID | List[Message] | 获取聊天记录 |
-| `get_seller_info(seller_id)` | 卖家ID | SellerInfo | 获取卖家信息 |
+**具体实现** (`goofish_platform/client.py` — `GoofishClient`):
 
-**平台交互方式**: 统一使用 **Playwright 浏览器自动化**，完整模拟用户操作，功能覆盖搜索、详情获取、收藏、聊天等全部场景。闲鱼无公开 API，浏览器自动化是功能覆盖最全面且最稳定的方案。
+- `BrowserEngine`：持久化 Chromium 上下文、`browser_data_dir`、可选代理。
+- `AuthManager`：Cookie 加载/保存、`ensure_logged_in`。
+- `AntiDetect`：`search`/`detail` 后 `random_browse_pause()`（约 3~15s）；发消息前有额外延迟。
+- `RateLimiterRegistry`：按 `config/settings.py` 对 search/detail/favorite/message 等限流。
 
-### 6.2 商品搜索模块 (Searcher)
+**运行时 DTO（非 ORM）**:
 
-**职责**: 根据用户配置执行商品搜索、过滤、初步排序。
+| 类型 | 定义位置 | 主要字段 |
+|------|----------|----------|
+| `ProductBrief` | `goofish_platform/parsers/search_parser.py` | `product_id`, `title`, `price`, `image_url`, `seller_name`, `location`, `product_url` |
+| `ProductDetail` | `goofish_platform/parsers/detail_parser.py` | `product_id`, `title`, `description`, `price`, `images`, `video_url`, `seller_id`, `seller_name`, `seller_credit`, `location`, `product_url` |
 
-**搜索策略**:
-- 支持多关键词组合搜索（主关键词 + 补充关键词）
-- 支持多种排序方式切换（综合排序、价格排序、最新发布）
-- 自动翻页，直到收集满 `max_candidates` 个候选
-- 对搜索结果进行去重（基于 `product_id`）
+### 6.2 搜索页解析 (`SearchParser`)
 
-**图片对照筛选**（当用户提供 `reference_images` 时启用）:
-- 在获取商品详情页图片后，将用户参考图片与商品主图/详情图一起提交给多模态视觉模型
-- 模型综合判断商品外观、型号、颜色、款式等与参考图片的匹配程度，输出 `image_match_score` (0-1)
-- 匹配度低于 `image_match_threshold` 的商品直接淘汰，不进入后续品相鉴定流程
-- 该步骤可大幅减少不相关商品进入后续阶段，降低 VLM 调用成本
+- 等待列表页商品链接（选择器来自 `PlatformConfig.product_link_selector`）。
+- **空结果 / 风控**：`_diagnose_page` 根据正文匹配反爬、登录、无结果文案；超时打诊断日志。
+- **闲鱼「猜你喜欢」**：若页面实为推荐流而非真实搜索结果，返回空列表，避免把推荐商品当检索结果。
+- 解析链接去重、`ProductBrief` 列表。
 
-**初筛打分**:
-```
-# 未提供参考图片时:
-初筛分 = f(价格合理度, 标题相关度, 发布时效性, 卖家基础信用)
+### 6.3 关键词 Agent (`KeywordOptimizer`)
 
-# 提供参考图片时，图片匹配度作为额外加权因子:
-初筛分 = f(价格合理度, 标题相关度, 发布时效性, 卖家基础信用, 图片匹配度)
-```
-- 价格合理度: 价格越接近 target_price 且在 max_price 内越高
-- 标题相关度: 通过关键词匹配与语义相似度计算
-- 发布时效性: 越新发布的商品分数越高（指数衰减）
-- 卖家基础信用: 信用等级/芝麻信用分归一化
-- 图片匹配度: `image_match_score` 归一化（仅在提供参考图片时参与计算）
+- 文件：`ai/keyword_optimizer.py`。
+- 输入：用户**原始** `keywords`、当前搜索结果标题样本（最多约 15 条）、历史 `OptimizationResult` 列表。
+- 输出：`OptimizationResult`（`intent_analysis`、`keyword_decomposition`、`search_strategies`、`coverage_check`、`optimized_keywords`）；完整推理链写入日志。
+- JSON 解析：剥离 thinking 块、markdown 围栏、括号配对提取、弯引号归一化、`json.loads` 失败时正则抽 `recommendation`，**禁止**把整段原始响应当作搜索词。
 
-### 6.3 商品评估模块 (Assessor)
+### 6.4 商品搜索模块 (`Searcher`)
+
+- 文件：`modules/searcher.py`。
+- 依赖：`PlatformClient`、`VLMClient`、`LLMClient`、`KeywordOptimizer`、`Session`。
+- **常量**：`MAX_KEYWORD_OPTIMIZE_RETRIES = 3`；`MISMATCH_THRESHOLD = 0.8`（不相关率 ≥ 80% 触发换词）；详情最多处理 **10** 个商品（`MAX_DETAIL_ATTEMPTS`）。
+- **`_smart_search`**：循环搜索 → `SearchParser` 结果 → **LLM 批量判定标题与 `task.keywords` 意图是否相关** → 必要时调用 `KeywordOptimizer` → 换词后 **5~10s** 随机等待再搜。
+- **`execute`**：初筛通过后拉详情、`_passes_filters`、可选 VLM 图匹配、`_score_and_sort`、`session.commit` 写入 `ProductCandidate`。
+
+**初筛打分**（`Searcher._score_and_sort`，与 `Settings` 里 w_condition 等设计权重并存，Phase1 使用下列简化式）:
+
+- 无参考图：`initial_score = 0.4 * price_s + 0.3 * credit_s + 0.3`
+- 有参考图：`initial_score = 0.3 * price_s + 0.2 * credit_s + 0.3 * image_match_score + 0.2`
+- `price_s`：在 `target_price` ~ `max_price` 间归一化；`credit_s = min(seller_credit/1000, 1)`。
+
+**图片对照**（`reference_images` 非空）: `VLMClient.match_images` 最多 3 张商品图 vs 参考图，低于 `image_match_threshold` 淘汰。
+
+### 6.5 商品评估模块 (Assessor)
 
 **职责**: 利用多模态 AI 模型对商品品相进行智能评估。
 
@@ -522,7 +576,7 @@ Agent 在进入谈判前，通过多渠道采集价格数据，构建全面的�
 }
 ```
 
-### 6.4 卖家沟通模块 (Chatter)
+### 6.6 卖家沟通模块 (Chatter)
 
 **职责**: 管理与卖家的自动对话，收集关键信息，为谈判做准备。
 
@@ -561,7 +615,7 @@ NEGOTIATING ──(达成协议)──> COMPLETED
 - 卖家回复后等待 5-15 秒再回复（模拟阅读时间）
 - 单次对话总消息不超过 20 条（不含谈判阶段）
 
-### 6.5 价格谈判模块 (Negotiator)
+### 6.7 价格谈判模块 (Negotiator)
 
 **职责**: 基于市场分析和用户预算，执行智能价格谈判。
 
@@ -638,7 +692,7 @@ else P_seller > P_max:
 | 最终出价 | 限时压力 | "最多能接受 XX，可以的话现在就拍" |
 | 礼貌离场 | 留有余地 | "这个价格有点超预算了，我再看看，谢谢老板" |
 
-### 6.6 通知模块 (Notifier)
+### 6.8 通知模块 (Notifier)
 
 **职责**: 在关键节点向用户推送进度与结果通知。
 
@@ -665,39 +719,42 @@ else P_seller > P_max:
 
 ### 7.1 核心实体
 
-#### Task (购买任务)
+#### Task (购买任务) — `models/task.py`
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `id` | UUID | 主键 |
 | `user_id` | UUID | 所属用户 |
+| `platform` | `PlatformType` | `goofish` / `taobao` / `jd` / `pdd` / `custom` |
 | `keywords` | String | 搜索关键词 |
-| `min_price` | Float | 最低价格 |
+| `min_price` | Float | 最低价格（默认 0） |
 | `max_price` | Float | 最高价格 |
 | `target_price` | Float | 心理价位 |
-| `condition_requirement` | Enum | 最低品相要求 |
+| `condition_requirement` | `ConditionGrade` | 最低品相要求（数据库存整型枚举值） |
 | `location` | String? | 地域偏好 |
-| `exclude_keywords` | List[String] | 排除关键词 |
-| `max_candidates` | Int | 最大候选数 |
-| `max_negotiate_count` | Int | 最大谈判卖家数 |
-| `negotiate_rounds_limit` | Int | 单卖家最大谈判轮次 |
-| `reference_images` | List[String] | 用户提供的参考图片路径/URL |
-| `image_match_threshold` | Float | 图片匹配度阈值 (默认 0.6) |
+| `exclude_keywords` | List[String] | 排除关键词（JSON） |
+| `max_candidates` | Int | 列表页最多跟进条目（默认 20） |
+| `max_negotiate_count` | Int | 进入谈判的卖家数上限（默认 5） |
+| `negotiate_rounds_limit` | Int | 单卖家谈判轮次上限（默认 10） |
+| `seller_min_credit` | Int? | 卖家最低信用 |
+| `prefer_verified` | Bool | 是否偏好验货/严选（字段存在，Searcher 内未单独分支） |
+| `reference_images` | List[String] | 参考图路径或 URL（JSON） |
+| `image_match_threshold` | Float | 图匹配阈值（默认 0.6） |
 | `custom_instructions` | Text? | 用户自定义指令 |
-| `notification_channel` | Enum | 通知渠道 |
-| `status` | Enum | 任务状态 |
-| `current_phase` | Enum | 当前执行阶段 |
-| `result_summary` | JSON? | 任务结果摘要 |
+| `notification_channel` | `NotificationChannel` | `in_app` / `email` / `webhook` |
+| `status` | `TaskStatus` | 任务状态 |
+| `current_phase` | `TaskPhase?` | 当前阶段 |
+| `result_summary` | JSON? | 结果摘要 |
 | `created_at` | DateTime | 创建时间 |
 | `updated_at` | DateTime | 更新时间 |
 
-#### ProductCandidate (候选商品)
+#### ProductCandidate (候选商品) — `models/candidate.py`
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `id` | UUID | 主键 |
 | `task_id` | UUID | 所属任务 |
-| `platform_product_id` | String | 闲鱼商品 ID |
+| `platform_product_id` | String | 平台商品 ID |
 | `title` | String | 商品标题 |
 | `description` | Text | 商品描述 |
 | `price` | Float | 标价 |
@@ -712,13 +769,13 @@ else P_seller > P_max:
 | `status` | Enum | 候选状态 |
 | `created_at` | DateTime | 入选时间 |
 
-#### AssessmentReport (品相评估报告)
+#### AssessmentReport (品相评估报告) — `models/assessment.py`
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `id` | UUID | 主键 |
 | `candidate_id` | UUID | 关联候选商品 |
-| `condition_grade` | Enum | 品相等级 |
+| `condition_grade` | `ConditionGrade` | 品相等级（整型枚举） |
 | `condition_score` | Float | 品相评分 (1-10) |
 | `defects` | JSON | 瑕疵列表 |
 | `description_match` | Float | 描述一致性评分 (1-10) |
@@ -730,22 +787,22 @@ else P_seller > P_max:
 | `model_used` | String | 使用的评估模型 |
 | `created_at` | DateTime | 评估时间 |
 
-#### SellerConversation (卖家对话)
+#### SellerConversation (卖家对话) — `models/conversation.py`
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `id` | UUID | 主键 |
 | `candidate_id` | UUID | 关联候选商品 |
 | `seller_id` | String | 卖家 ID |
-| `platform_conversation_id` | String? | 闲鱼会话 ID |
-| `messages` | JSON | 消息记录列表 |
-| `chat_status` | Enum | 对话状态 |
-| `seller_attitude` | Enum? | 卖家态度评估 |
-| `info_collected` | JSON | 已收集的信息 |
+| `platform_conversation_id` | String? | 平台会话 ID |
+| `messages` | List[dict] | 消息记录（JSON） |
+| `chat_status` | `ChatStatus` | 对话状态 |
+| `seller_attitude` | String? | 卖家态度（自由文本，非枚举） |
+| `info_collected` | dict | 已收集信息（JSON） |
 | `started_at` | DateTime | 开始时间 |
 | `last_message_at` | DateTime? | 最后消息时间 |
 
-#### NegotiationRecord (谈判记录)
+#### NegotiationRecord (谈判记录) — `models/negotiation.py`
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -761,9 +818,16 @@ else P_seller > P_max:
 | `status` | Enum | 谈判状态 |
 | `history` | JSON | 谈判过程记录 (每轮出价/还价/话术) |
 
-### 7.2 枚举类型
+### 7.2 枚举类型 — `models/enums.py`
 
 ```
+PlatformType:
+  GOOFISH        - 闲鱼
+  TAOBAO         - 淘宝二手
+  JD             - 京东二手
+  PDD            - 拼多多二手
+  CUSTOM         - 自定义（需自行传入 PlatformConfig）
+
 TaskStatus:
   PENDING        - 等待执行
   RUNNING        - 执行中
@@ -979,87 +1043,66 @@ RUNNING 内部阶段流转:
 | **谈判策略** | LLM 动态生成而非规则引擎 | 谈判场景多变，硬编码规则难以覆盖所有情况，LLM 可灵活应对 |
 | **通知机制** | 多渠道支持 | 不同用户偏好不同，关键结果应能及时触达 |
 | **不自动下单** | Agent 只谈不买 | 涉及资金安全，最终购买决策必须由用户本人确认 |
+| **搜索列表相关性** | LLM 批量判定标题 vs用户关键词意图 | 子串匹配无法处理行话、异名同物；与 KeywordOptimizer 配合减少无效详情请求 |
+| **无结果页** | SearchParser 识别「猜你喜欢」等兜底 | 避免把推荐流当真实搜索结果，减少后续污染 |
+| **关键词优化** | 独立 KeywordOptimizer + 结构化 JSON | 可记录推理链；解析多层兜底避免把整段模型输出当搜索词 |
 
 ---
 
-## 14. 项目目录结构
+## 14. 项目目录结构（与仓库一致）
 
 ```
 goofish_agent/
 ├── config/
-│   ├── settings.py              # 全局配置 (环境变量、默认参数)
-│   └── logging.py               # 日志配置
+│   ├── settings.py              # BUYER_AGENT_* 环境变量、LLM/VLM/浏览器/限流等
+│   └── logging.py               # Loguru 配置
 │
 ├── core/
-│   ├── task_manager.py          # 任务调度与生命周期管理
-│   ├── state_machine.py         # 状态机定义与流转逻辑
-│   └── scheduler.py             # 任务队列与定时调度
+│   ├── task_manager.py          # 六阶段编排、模块装配
+│   ├── state_machine.py         # TaskStatus 转移、TaskPhase 顺序
+│   └── scheduler.py             # 定时调度（若使用）
 │
 ├── platform/
-│   ├── client.py                # GoofishClient 闲鱼平台交互客户端
-│   ├── browser.py               # 浏览器引擎管理 (Playwright)
-│   ├── anti_detect.py           # 反检测与行为模拟
-│   ├── auth.py                  # 登录与会话管理
+│   ├── base.py                  # PlatformConfig、PlatformClient 抽象、各平台 URL模板
+│   └── __init__.py              # create_platform_client
+│
+├── goofish_platform/            # Playwright 实现（多平台共用 GoofishClient + Config）
+│   ├── client.py                # GoofishClient：search / detail / 限流 / 反爬暂停
+│   ├── browser.py               # BrowserEngine 持久化上下文
+│   ├── auth.py                  # AuthManager、登录与 Cookie
+│   ├── anti_detect.py           # 随机延迟、人类化操作辅助
 │   └── parsers/
-│       ├── search_parser.py     # 搜索结果页解析
-│       ├── detail_parser.py     # 商品详情页解析
-│       └── chat_parser.py       # 聊天页面解析
+│       ├── search_parser.py     # ProductBrief、猜你喜欢/风控诊断
+│       ├── detail_parser.py     # ProductDetail
+│       └── chat_parser.py       # 聊天解析
 │
 ├── modules/
-│   ├── searcher.py              # 商品搜索与初筛模块
-│   ├── assessor.py              # 品相智能鉴定模块
-│   ├── favoriter.py             # 收藏与候选管理模块
-│   ├── chatter.py               # 卖家自动沟通模块
-│   ├── negotiator.py            # 价格智能谈判模块
-│   └── notifier.py              # 结果通知模块
+│   ├── searcher.py              # Smart search、LLM 相关性、KeywordOptimizer、初筛打分
+│   ├── assessor.py
+│   ├── favoriter.py
+│   ├── chatter.py
+│   ├── negotiator.py
+│   └── notifier.py
 │
 ├── ai/
-│   ├── vlm_client.py            # 多模态视觉模型客户端
-│   ├── llm_client.py            # 对话生成模型客户端
-│   ├── market_analyzer.py       # 市场价格分析 (多平台采集 + 闲鱼卖家间比价)
+│   ├── llm_client.py            # OpenAI 兼容异步客户端
+│   ├── vlm_client.py          # 品相鉴定、图匹配
+│   ├── keyword_optimizer.py   # 关键词 Agent、JSON 解析兜底
+│   ├── market_analyzer.py
 │   └── prompts/
-│       ├── assessment.py        # 品相评估 Prompt 模板
-│       ├── chat.py              # 卖家沟通 Prompt 模板
-│       └── negotiation.py       # 价格谈判 Prompt 模板
+│       ├── assessment.py
+│       ├── chat.py
+│       └── negotiation.py
 │
-├── models/
-│   ├── task.py                  # Task 数据模型
-│   ├── candidate.py             # ProductCandidate 数据模型
-│   ├── assessment.py            # AssessmentReport 数据模型
-│   ├── conversation.py          # SellerConversation 数据模型
-│   ├── negotiation.py           # NegotiationRecord 数据模型
-│   └── enums.py                 # 枚举类型定义
-│
-├── schemas/
-│   ├── task.py                  # Task API Schema
-│   ├── candidate.py             # ProductCandidate API Schema
-│   └── notification.py          # 通知 Schema
-│
-├── api/                         # (可选) Web API 层
-│   ├── routes/
-│   │   ├── tasks.py             # 任务 CRUD 路由
-│   │   └── results.py           # 结果查询路由
-│   └── app.py                   # FastAPI 应用入口
-│
-├── storage/
-│   ├── database.py              # 数据库连接与初始化
-│   └── media_store.py           # 媒体文件存储管理
-│
-├── utils/
-│   ├── retry.py                 # 重试装饰器
-│   ├── rate_limiter.py          # 频率限制器
-│   └── crypto.py                # 凭证加密工具
-│
-├── tests/
-│   ├── test_searcher.py
-│   ├── test_assessor.py
-│   ├── test_chatter.py
-│   ├── test_negotiator.py
-│   └── fixtures/                # 测试用模拟数据
-│
-├── main.py                      # CLI 入口
-├── requirements.txt             # Python 依赖
-└── README.md                    # 项目说明
+├── models/                      # SQLModel 表
+├── schemas/                     # Pydantic API Schema
+├── api/                         # FastAPI应用与 routes
+├── storage/                     # database.py、media_store.py
+├── utils/                       # retry、rate_limiter、crypto
+├── main.py                      # CLI: run / server
+├── requirements.txt
+├── README.md
+└── DESIGN.md
 ```
 
 ---
