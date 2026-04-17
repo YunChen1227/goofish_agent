@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from sqlmodel import select
 
+from goofish_agent.core.state_machine import PHASE_ORDER
 from goofish_agent.core.task_manager import TaskManager
 from goofish_agent.models.enums import ConditionGrade, NotificationChannel, PlatformType
 from goofish_agent.models.task import Task
@@ -77,6 +78,25 @@ async def get_task(task_id: UUID) -> Task:
         if not task:
             raise HTTPException(404, "Task not found")
         return task
+
+
+@router.get("/{task_id}/progress")
+async def task_progress(task_id: UUID) -> dict:
+    with get_session() as session:
+        task = session.get(Task, task_id)
+        if not task:
+            raise HTTPException(404, "Task not found")
+        return {
+            "task_id": str(task.id),
+            "status": task.status.value if hasattr(task.status, "value") else str(task.status),
+            "current_phase": (
+                task.current_phase.value if task.current_phase and hasattr(task.current_phase, "value")
+                else (str(task.current_phase) if task.current_phase else None)
+            ),
+            "phase_order": [p.value for p in PHASE_ORDER],
+            "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+            "result_summary": task.result_summary,
+        }
 
 
 @router.post("/{task_id}/pause")

@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>Goofish Agent · 流程管理</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; color: #222; background: #f5f6f8; }
+  header { padding: 14px 24px; background: #1f2937; color: #fff; font-size: 18px; font-weight: 600; }
+  .app { display: grid; grid-template-columns: 380px 1fr; gap: 16px; padding: 16px; min-height: calc(100vh - 50px); }
+  .panel { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+  h2 { font-size: 15px; margin: 0 0 12px; color: #374151; }
+  label { display: block; font-size: 12px; color: #6b7280; margin: 8px 0 4px; }
+  input, select, textarea { width: 100%; padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px; font-family: inherit; }
+  textarea { resize: vertical; min-height: 48px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  button { padding: 8px 14px; border: none; border-radius: 4px; background: #2563eb; color: #fff; font-size: 13px; cursor: pointer; }
+  button.secondary { background: #6b7280; }
+  button.danger { background: #dc2626; }
+  button:hover { opacity: 0.9; }
+  .task-list { max-height: 340px; overflow-y: auto; margin-top: 8px; border-top: 1px solid #eee; }
+  .task-item { padding: 8px 10px; border-bottom: 1px solid #f0f0f0; cursor: pointer; font-size: 12px; }
+  .task-item:hover, .task-item.active { background: #eff6ff; }
+  .task-item .kw { font-weight: 600; color: #111; }
+  .task-item .meta { color: #6b7280; margin-top: 2px; }
+  .status-tag { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 11px; margin-left: 4px; }
+  .status-running { background: #dbeafe; color: #1d4ed8; }
+  .status-pending { background: #f3f4f6; color: #374151; }
+  .status-completed { background: #d1fae5; color: #065f46; }
+  .status-failed, .status-error, .status-cancelled { background: #fee2e2; color: #991b1b; }
+  .status-paused { background: #fef3c7; color: #92400e; }
+  .phases { display: flex; align-items: center; gap: 0; margin: 16px 0 24px; }
+  .phase { flex: 1; text-align: center; position: relative; padding: 10px 4px; border-radius: 6px; font-size: 12px; background: #f3f4f6; color: #6b7280; border: 2px solid transparent; }
+  .phase.done { background: #d1fae5; color: #065f46; }
+  .phase.current { background: #2563eb; color: #fff; border-color: #1d4ed8; font-weight: 600; }
+  .phase.failed { background: #fee2e2; color: #991b1b; }
+  .phase + .phase::before { content: "→"; position: absolute; left: -10px; top: 50%; transform: translateY(-50%); color: #9ca3af; font-size: 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+  th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid #e5e7eb; }
+  th { background: #f9fafb; color: #374151; font-weight: 600; }
+  .empty { color: #9ca3af; font-size: 12px; padding: 12px; text-align: center; }
+  .actions { display: flex; gap: 8px; margin-top: 8px; }
+  .section { margin-top: 20px; }
+  .toast { position: fixed; top: 16px; right: 16px; padding: 10px 14px; background: #111; color: #fff; border-radius: 4px; font-size: 13px; opacity: 0; transition: opacity 0.2s; z-index: 1000; }
+  .toast.show { opacity: 0.92; }
+</style>
+</head>
+<body>
+<header>🐟 Goofish Agent · 流程管理</header>
+<div class="app">
+  <div class="panel">
+    <h2>创建购买任务</h2>
+    <form id="create-form">
+      <label>平台 *</label>
+      <select name="platform" required>
+        <option value="goofish">闲鱼 (goofish)</option>
+        <option value="taobao">淘宝 (taobao)</option>
+        <option value="jd">京东 (jd)</option>
+        <option value="pdd">拼多多 (pdd)</option>
+      </select>
+      <label>搜索关键词 *</label>
+      <input name="keywords" required placeholder="iPhone 15 Pro 256G" />
+      <div class="row">
+        <div><label>最低价</label><input name="min_price" type="number" step="0.01" value="0" /></div>
+        <div><label>最高价 *</label><input name="max_price" type="number" step="0.01" required /></div>
+      </div>
+      <label>目标价 *</label>
+      <input name="target_price" type="number" step="0.01" required />
+      <label>成色要求</label>
+      <select name="condition_requirement">
+        <option>SEALED</option><option>UNBOXED</option>
+        <option selected>LIKE_NEW</option><option>LIGHTLY_USED</option>
+        <option>WELL_USED</option><option>FAIR</option><option>POOR</option>
+      </select>
+      <label>地域（可选）</label>
+      <input name="location" placeholder="同城 / 江浙沪" />
+      <label>排除关键词（逗号分隔）</label>
+      <input name="exclude_keywords" placeholder="碎屏, 拆机" />
+      <div class="row">
+        <div><label>最多候选数</label><input name="max_candidates" type="number" value="20" /></div>
+        <div><label>最多谈判数</label><input name="max_negotiate_count" type="number" value="5" /></div>
+      </div>
+      <label>参考图 URL（每行一个，可选）</label>
+      <textarea name="reference_images" placeholder="https://..."></textarea>
+      <label>图片匹配阈值 (0-1)</label>
+      <input name="image_match_threshold" type="number" step="0.05" value="0.6" />
+      <label>自定义指令</label>
+      <textarea name="custom_instructions" placeholder="必须带原装充电器..."></textarea>
+      <label>通知渠道</label>
+      <select name="notification_channel">
+        <option>IN_APP</option><option>EMAIL</option><option>WEBHOOK</option>
+      </select>
+      <div class="actions" style="margin-top: 12px;">
+        <button type="submit">创建并开始</button>
+      </div>
+    </form>
+
+    <div class="section">
+      <h2>任务列表 <span id="task-count" style="color:#9ca3af;font-weight:normal;"></span></h2>
+      <div class="task-list" id="task-list"></div>
+    </div>
+  </div>
+
+  <div class="panel" id="detail">
+    <div class="empty">← 从左侧选择一个任务以查看流程进度</div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const PHASES = ["searching","assessing","favoriting","chatting","negotiating","notifying"];
+const PHASE_LABELS = {searching:"搜索",assessing:"鉴定",favoriting:"收藏",chatting:"沟通",negotiating:"谈判",notifying:"通知"};
+const TERMINAL = ["completed","failed","cancelled","error"];
+let selectedTaskId = null;
+let pollTimer = null;
+
+function toast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 2000);
+}
+
+async function api(path, opts={}) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+document.getElementById("create-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const body = {
+    platform: fd.get("platform"),
+    keywords: fd.get("keywords"),
+    min_price: parseFloat(fd.get("min_price") || 0),
+    max_price: parseFloat(fd.get("max_price")),
+    target_price: parseFloat(fd.get("target_price")),
+    condition_requirement: fd.get("condition_requirement"),
+    location: fd.get("location") || null,
+    exclude_keywords: (fd.get("exclude_keywords") || "").split(",").map(s=>s.trim()).filter(Boolean),
+    max_candidates: parseInt(fd.get("max_candidates")) || 20,
+    max_negotiate_count: parseInt(fd.get("max_negotiate_count")) || 5,
+    reference_images: (fd.get("reference_images") || "").split("\n").map(s=>s.trim()).filter(Boolean),
+    image_match_threshold: parseFloat(fd.get("image_match_threshold") || 0.6),
+    custom_instructions: fd.get("custom_instructions") || null,
+    notification_channel: fd.get("notification_channel"),
+  };
+  try {
+    const task = await api("/api/tasks/", {
+      method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body),
+    });
+    toast("任务已创建");
+    e.target.reset();
+    await loadTasks();
+    selectTask(task.id);
+  } catch (err) { toast("创建失败: " + err.message); }
+});
+
+async function loadTasks() {
+  const data = await api("/api/tasks/");
+  const tasks = (data.tasks || []).slice().sort((a,b) => (b.updated_at||"").localeCompare(a.updated_at||""));
+  document.getElementById("task-count").textContent = `(${tasks.length})`;
+  const list = document.getElementById("task-list");
+  if (!tasks.length) { list.innerHTML = '<div class="empty">暂无任务</div>'; return; }
+  list.innerHTML = tasks.map(t => `
+    <div class="task-item ${t.id === selectedTaskId ? 'active' : ''}" data-id="${t.id}">
+      <div class="kw">${escapeHtml(t.keywords)} <span class="status-tag status-${t.status}">${t.status}</span></div>
+      <div class="meta">${t.platform} · ${t.current_phase || '-'} · ¥${t.target_price}/${t.max_price}</div>
+    </div>`).join("");
+  list.querySelectorAll(".task-item").forEach(el =>
+    el.addEventListener("click", () => selectTask(el.dataset.id))
+  );
+}
+
+function escapeHtml(s) { return (s||"").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
+
+function selectTask(id) {
+  selectedTaskId = id;
+  document.querySelectorAll(".task-item").forEach(el =>
+    el.classList.toggle("active", el.dataset.id === id));
+  if (pollTimer) clearInterval(pollTimer);
+  renderDetail();
+  pollTimer = setInterval(renderDetail, 2000);
+}
+
+async function renderDetail() {
+  if (!selectedTaskId) return;
+  try {
+    const [progress, candidates, negotiations] = await Promise.all([
+      api(`/api/tasks/${selectedTaskId}/progress`),
+      api(`/api/results/${selectedTaskId}/candidates`).catch(() => ({candidates: []})),
+      api(`/api/results/${selectedTaskId}/negotiations`).catch(() => ({negotiations: []})),
+    ]);
+    drawDetail(progress, candidates, negotiations);
+    if (TERMINAL.includes(progress.status) && pollTimer) {
+      clearInterval(pollTimer); pollTimer = null;
+    }
+  } catch (err) { /* ignore */ }
+}
+
+function drawDetail(p, c, n) {
+  const isFailed = ["FAILED","ERROR","CANCELLED"].includes(p.status);
+  const currentIdx = p.current_phase ? PHASES.indexOf(p.current_phase) : -1;
+  const phasesHtml = PHASES.map((ph, i) => {
+    let cls = "phase";
+    if (p.status === "completed") cls += " done";
+    else if (isFailed && i === currentIdx) cls += " failed";
+    else if (i < currentIdx) cls += " done";
+    else if (i === currentIdx) cls += " current";
+    return `<div class="${cls}">${PHASE_LABELS[ph]}</div>`;
+  }).join("");
+  const cands = (c.candidates || []);
+  const negs = (n.negotiations || []);
+  document.getElementById("detail").innerHTML = `
+    <h2>任务 ${p.task_id.slice(0,8)} · <span class="status-tag status-${p.status}">${p.status}</span></h2>
+    <div class="phases">${phasesHtml}</div>
+    <div class="actions">
+      <button class="secondary" onclick="doAction('pause')" ${p.status!=='running'?'disabled':''}>暂停</button>
+      <button class="danger" onclick="doAction('cancel')" ${TERMINAL.includes(p.status)?'disabled':''}>取消</button>
+    </div>
+    <div class="section">
+      <h2>候选商品 (${cands.length})</h2>
+      ${cands.length ? `<table><thead><tr><th>标题</th><th>价格</th><th>卖家</th><th>状态</th><th>评分</th></tr></thead><tbody>
+        ${cands.map(x => `<tr><td>${escapeHtml(x.title||'')}</td><td>¥${x.price}</td><td>${escapeHtml(x.seller_name||'')}</td><td>${x.status}</td><td>${(x.initial_score??0).toFixed(2)}</td></tr>`).join("")}
+      </tbody></table>` : '<div class="empty">暂无候选</div>'}
+    </div>
+    <div class="section">
+      <h2>谈判结果 (${negs.length})</h2>
+      ${negs.length ? `<table><thead><tr><th>卖家</th><th>初始价</th><th>目标价</th><th>成交价</th><th>轮次</th><th>状态</th></tr></thead><tbody>
+        ${negs.map(x => `<tr><td>${escapeHtml(x.seller_name||x.conversation_id||'')}</td><td>¥${x.initial_price??'-'}</td><td>¥${x.target_price??'-'}</td><td>${x.agreed_price?('¥'+x.agreed_price):'-'}</td><td>${x.round_count??0}</td><td>${x.status}</td></tr>`).join("")}
+      </tbody></table>` : '<div class="empty">暂无谈判记录</div>'}
+    </div>
+    ${p.result_summary ? `<div class="section"><h2>结果摘要</h2><pre style="background:#f9fafb;padding:10px;border-radius:4px;font-size:12px;overflow:auto;">${escapeHtml(JSON.stringify(p.result_summary,null,2))}</pre></div>` : ''}
+  `;
+}
+
+async function doAction(kind) {
+  if (!selectedTaskId) return;
+  try {
+    await api(`/api/tasks/${selectedTaskId}/${kind}`, { method: "POST" });
+    toast(kind === "pause" ? "已暂停" : "已取消");
+    renderDetail(); loadTasks();
+  } catch (err) { toast("操作失败: " + err.message); }
+}
+
+loadTasks();
+setInterval(loadTasks, 3000);
+</script>
+</body>
+</html>
