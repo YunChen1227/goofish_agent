@@ -21,6 +21,7 @@ from goofish_agent.hooks.base import (
     HookResult,
 )
 from goofish_agent.hooks.detail_hook import ProductDetailHook
+from goofish_agent.hooks.image_acquisition_hook import ImageAcquisitionHook
 from goofish_agent.hooks.login_hook import LoginVerificationHook
 from goofish_agent.hooks.search_hook import ProductSearchHook
 
@@ -32,4 +33,5 @@ __all__ = [
     "LoginVerificationHook",
     "ProductSearchHook",
     "ProductDetailHook",
+    "ImageAcquisitionHook",
 ]

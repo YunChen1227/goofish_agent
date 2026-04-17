@@ -7,6 +7,7 @@ from loguru import logger
 from sqlmodel import Session
 
 from goofish_agent.ai.vlm_client import VLMClient
+from goofish_agent.hooks.image_acquisition_hook import ImageAcquisitionHook
 from goofish_agent.models.assessment import AssessmentReport
 from goofish_agent.models.candidate import ProductCandidate
 from goofish_agent.models.enums import CandidateStatus, ConditionGrade
@@ -17,10 +18,19 @@ from goofish_agent.storage.media_store import MediaStore
 class Assessor:
     """Phase 2: Condition assessment via multi-modal VLM."""
 
-    def __init__(self, vlm: VLMClient, media_store: MediaStore, session: Session) -> None:
+    def __init__(
+        self,
+        vlm: VLMClient,
+        media_store: MediaStore,
+        session: Session,
+        image_hook: ImageAcquisitionHook | None = None,
+        page: object | None = None,
+    ) -> None:
         self._vlm = vlm
         self._media = media_store
         self._session = session
+        self._image_hook = image_hook
+        self._page = page
 
     async def execute(
         self, candidates: list[ProductCandidate], task: Task
@@ -82,7 +92,25 @@ class Assessor:
         self, candidate: ProductCandidate, task: Task
     ) -> AssessmentReport | None:
         try:
-            images = candidate.images[:6]
+            images: list[str] = list(candidate.images[:6])
+            if self._image_hook is not None and candidate.images:
+                try:
+                    acq = await self._image_hook.acquire_for_candidate(
+                        candidate=candidate, page=self._page
+                    )
+                    if acq.base64_images:
+                        logger.info(
+                            f"[图片获取] {candidate.title} | "
+                            f"本地 {len(acq.base64_images)} 张 | "
+                            f"失败 {len(acq.failed_urls)} | 策略={acq.methods}"
+                        )
+                        images = acq.base64_images
+                    else:
+                        logger.warning(
+                            f"[图片获取] 全部策略失败，回退原始 URL: {candidate.title}"
+                        )
+                except Exception as e:
+                    logger.warning(f"[图片获取] 异常，回退原始 URL: {e}")
             ref_images = task.reference_images if task.reference_images else None
 
             result = await self._vlm.assess_product(

@@ -18,10 +18,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Marketplace Buyer Agent", version="1.0.0", lifespan=lifespan)
 
-from goofish_agent.api.routes import results, tasks  # noqa: E402
+from goofish_agent.api.routes import logs, results, tasks  # noqa: E402
 
 app.include_router(tasks.router, prefix="/api/tasks", tags=["tasks"])
 app.include_router(results.router, prefix="/api/results", tags=["results"])
+app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
 
 
 @app.get("/health")

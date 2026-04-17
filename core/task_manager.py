@@ -9,6 +9,8 @@ from goofish_agent.ai.llm_client import LLMClient
 from goofish_agent.ai.market_analyzer import MarketAnalyzer
 from goofish_agent.ai.vlm_client import VLMClient
 from goofish_agent.core.state_machine import StateMachine
+from goofish_agent.hooks.image_acquisition_hook import ImageAcquisitionHook
+from goofish_agent.skills.image_acquisition_skill import ImageAcquisitionSkill
 from goofish_agent.models.enums import (
     CandidateStatus,
     ChatStatus,
@@ -125,7 +127,12 @@ class TaskManager:
         session.commit()
         await notifier.notify_progress(task, "品相鉴定", f"评估 {len(candidates)} 个商品...")
 
-        assessor = Assessor(self._vlm, self._media, session)
+        image_skill = ImageAcquisitionSkill()
+        image_hook = ImageAcquisitionHook(skill=image_skill)
+        page = getattr(self._client, "_page", None)
+        assessor = Assessor(
+            self._vlm, self._media, session, image_hook=image_hook, page=page
+        )
         reports = await assessor.execute(candidates, task)
         passed = [c for c in candidates if c.status != CandidateStatus.REJECTED]
         if not passed:

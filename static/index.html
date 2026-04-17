@@ -5,127 +5,291 @@
 <title>Goofish Agent · 流程管理</title>
 <style>
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; color: #222; background: #f5f6f8; }
-  header { padding: 14px 24px; background: #1f2937; color: #fff; font-size: 18px; font-weight: 600; }
-  .app { display: grid; grid-template-columns: 380px 1fr; gap: 16px; padding: 16px; min-height: calc(100vh - 50px); }
-  .panel { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
-  h2 { font-size: 15px; margin: 0 0 12px; color: #374151; }
-  label { display: block; font-size: 12px; color: #6b7280; margin: 8px 0 4px; }
-  input, select, textarea { width: 100%; padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px; font-family: inherit; }
-  textarea { resize: vertical; min-height: 48px; }
+  body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; color: #222; background: #0f1117; }
+  header { padding: 14px 24px; background: #1a1d27; color: #e5e7eb; font-size: 18px; font-weight: 600; border-bottom: 1px solid #2d2f3e; display: flex; align-items: center; gap: 10px; }
+  header span.dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; animation: blink 2s infinite; display: inline-block; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  /* Layout: left sidebar + main area stacked (progress + log) */
+  .layout { display: grid; grid-template-columns: 360px 1fr; gap: 0; height: calc(100vh - 51px); overflow: hidden; }
+  .sidebar { background: #1a1d27; border-right: 1px solid #2d2f3e; display: flex; flex-direction: column; overflow: hidden; }
+  .main { display: flex; flex-direction: column; overflow: hidden; }
+
+  /* Sidebar sections */
+  .sidebar-section { padding: 14px 16px; border-bottom: 1px solid #2d2f3e; }
+  .sidebar-section:last-child { border-bottom: none; flex: 1; overflow-y: auto; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: #6b7280; margin: 0 0 10px; font-weight: 600; }
+  label { display: block; font-size: 12px; color: #9ca3af; margin: 7px 0 3px; }
+  input, select, textarea {
+    width: 100%; padding: 6px 8px; border: 1px solid #374151; border-radius: 4px;
+    font-size: 12px; font-family: inherit; background: #111827; color: #e5e7eb;
+  }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: #3b82f6; }
+  textarea { resize: vertical; min-height: 40px; }
   .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  button { padding: 8px 14px; border: none; border-radius: 4px; background: #2563eb; color: #fff; font-size: 13px; cursor: pointer; }
-  button.secondary { background: #6b7280; }
+  button { padding: 7px 14px; border: none; border-radius: 4px; background: #2563eb; color: #fff; font-size: 12px; cursor: pointer; font-weight: 500; }
+  button.secondary { background: #374151; }
   button.danger { background: #dc2626; }
-  button:hover { opacity: 0.9; }
-  .task-list { max-height: 340px; overflow-y: auto; margin-top: 8px; border-top: 1px solid #eee; }
-  .task-item { padding: 8px 10px; border-bottom: 1px solid #f0f0f0; cursor: pointer; font-size: 12px; }
-  .task-item:hover, .task-item.active { background: #eff6ff; }
-  .task-item .kw { font-weight: 600; color: #111; }
-  .task-item .meta { color: #6b7280; margin-top: 2px; }
-  .status-tag { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 11px; margin-left: 4px; }
-  .status-running { background: #dbeafe; color: #1d4ed8; }
-  .status-pending { background: #f3f4f6; color: #374151; }
-  .status-completed { background: #d1fae5; color: #065f46; }
-  .status-failed, .status-error, .status-cancelled { background: #fee2e2; color: #991b1b; }
-  .status-paused { background: #fef3c7; color: #92400e; }
-  .phases { display: flex; align-items: center; gap: 0; margin: 16px 0 24px; }
-  .phase { flex: 1; text-align: center; position: relative; padding: 10px 4px; border-radius: 6px; font-size: 12px; background: #f3f4f6; color: #6b7280; border: 2px solid transparent; }
-  .phase.done { background: #d1fae5; color: #065f46; }
-  .phase.current { background: #2563eb; color: #fff; border-color: #1d4ed8; font-weight: 600; }
-  .phase.failed { background: #fee2e2; color: #991b1b; }
-  .phase + .phase::before { content: "→"; position: absolute; left: -10px; top: 50%; transform: translateY(-50%); color: #9ca3af; font-size: 14px; }
-  table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
-  th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid #e5e7eb; }
-  th { background: #f9fafb; color: #374151; font-weight: 600; }
-  .empty { color: #9ca3af; font-size: 12px; padding: 12px; text-align: center; }
-  .actions { display: flex; gap: 8px; margin-top: 8px; }
-  .section { margin-top: 20px; }
-  .toast { position: fixed; top: 16px; right: 16px; padding: 10px 14px; background: #111; color: #fff; border-radius: 4px; font-size: 13px; opacity: 0; transition: opacity 0.2s; z-index: 1000; }
-  .toast.show { opacity: 0.92; }
+  button:hover:not(:disabled) { opacity: 0.85; }
+  button:disabled { opacity: 0.35; cursor: default; }
+
+  /* Task list */
+  .task-list { display: flex; flex-direction: column; gap: 0; }
+  .task-item { padding: 9px 16px; border-bottom: 1px solid #1f2332; cursor: pointer; font-size: 12px; transition: background 0.1s; }
+  .task-item:hover { background: #1f2332; }
+  .task-item.active { background: #1e3a5f; border-left: 3px solid #3b82f6; }
+  .task-item .kw { font-weight: 600; color: #e5e7eb; display: flex; align-items: center; gap: 6px; }
+  .task-item .meta { color: #6b7280; margin-top: 2px; font-size: 11px; }
+
+  .status-tag { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; }
+  .status-running { background: #1e3a5f; color: #60a5fa; }
+  .status-pending { background: #1f2332; color: #9ca3af; }
+  .status-completed { background: #064e3b; color: #34d399; }
+  .status-failed,.status-error,.status-cancelled { background: #450a0a; color: #f87171; }
+  .status-paused { background: #451a03; color: #fbbf24; }
+
+  /* Main top: progress + controls */
+  .progress-bar-area { padding: 16px 20px 12px; background: #1a1d27; border-bottom: 1px solid #2d2f3e; flex-shrink: 0; }
+  .phases { display: flex; align-items: stretch; gap: 0; }
+  .phase {
+    flex: 1; text-align: center; position: relative; padding: 10px 4px 8px;
+    font-size: 11px; font-weight: 500; background: #111827; color: #4b5563;
+    border: 1px solid #1f2332; border-radius: 0;
+  }
+  .phase:first-child { border-radius: 6px 0 0 6px; }
+  .phase:last-child { border-radius: 0 6px 6px 0; }
+  .phase.done { background: #064e3b; color: #34d399; border-color: #065f46; }
+  .phase.current {
+    background: #1e3a5f; color: #93c5fd; border-color: #2563eb;
+    animation: pulse-border 1.5s infinite;
+  }
+  @keyframes pulse-border { 0%,100%{border-color:#2563eb} 50%{border-color:#60a5fa} }
+  .phase.failed { background: #450a0a; color: #f87171; border-color: #7f1d1d; }
+  .phase .phase-icon { font-size: 16px; display: block; margin-bottom: 2px; }
+  .task-title-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .task-title-row h3 { margin: 0; font-size: 14px; color: #e5e7eb; font-weight: 600; }
+  .actions { display: flex; gap: 8px; margin-top: 10px; }
+
+  /* Split: log on left, tables on right inside main */
+  .main-body { display: grid; grid-template-columns: 1fr 420px; flex: 1; overflow: hidden; }
+
+  /* Log console */
+  .log-console { display: flex; flex-direction: column; border-right: 1px solid #2d2f3e; overflow: hidden; }
+  .log-header { padding: 8px 14px; background: #111827; border-bottom: 1px solid #1f2332; font-size: 11px; color: #6b7280; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
+  .log-header .indicator { display: flex; align-items: center; gap: 6px; }
+  .live-dot { width: 6px; height: 6px; border-radius: 50%; background: #22c55e; }
+  #log-output {
+    flex: 1; overflow-y: auto; padding: 10px 14px;
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    font-size: 11.5px; line-height: 1.6; background: #0b0d14; color: #94a3b8;
+  }
+  #log-output .log-line { white-space: pre-wrap; word-break: break-all; border-bottom: 1px solid #0f1117; padding: 1px 0; }
+  #log-output .log-line.info  { color: #94a3b8; }
+  #log-output .log-line.warn  { color: #fbbf24; }
+  #log-output .log-line.error { color: #f87171; }
+  #log-output .log-line.llm   { color: #a78bfa; }  /* 大模型推理 */
+  #log-output .log-line.search{ color: #38bdf8; }  /* 搜索 */
+  #log-output .log-line.assess{ color: #34d399; }  /* 品相鉴定 */
+  #log-output .log-line.chat  { color: #fb923c; }  /* 聊天/谈判 */
+  .log-controls { padding: 6px 14px; background: #111827; border-top: 1px solid #1f2332; display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+  .log-controls label { color: #6b7280; font-size: 11px; margin: 0; }
+  #auto-scroll-cb { width: auto; }
+
+  /* Right side: tables */
+  .tables-panel { display: flex; flex-direction: column; overflow-y: auto; padding: 14px; gap: 16px; }
+  .section-title { font-size: 12px; font-weight: 600; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  th, td { padding: 5px 8px; text-align: left; border-bottom: 1px solid #1f2332; }
+  th { background: #111827; color: #6b7280; font-weight: 600; font-size: 11px; }
+  td { color: #d1d5db; }
+  tr:hover td { background: #1a1d27; }
+  .empty { color: #4b5563; font-size: 12px; padding: 16px; text-align: center; }
+  pre.summary { background: #111827; padding: 10px; border-radius: 4px; font-size: 11px; color: #94a3b8; overflow: auto; max-height: 180px; margin: 0; white-space: pre-wrap; word-break: break-all; }
+
+  .toast { position: fixed; top: 16px; right: 16px; padding: 10px 16px; background: #1f2332; color: #e5e7eb; border-radius: 6px; font-size: 13px; opacity: 0; transition: opacity 0.2s; z-index: 1000; border: 1px solid #374151; }
+  .toast.show { opacity: 1; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
 </style>
 </head>
 <body>
-<header>🐟 Goofish Agent · 流程管理</header>
-<div class="app">
-  <div class="panel">
-    <h2>创建购买任务</h2>
-    <form id="create-form">
-      <label>平台 *</label>
-      <select name="platform" required>
-        <option value="goofish">闲鱼 (goofish)</option>
-        <option value="taobao">淘宝 (taobao)</option>
-        <option value="jd">京东 (jd)</option>
-        <option value="pdd">拼多多 (pdd)</option>
-      </select>
-      <label>搜索关键词 *</label>
-      <input name="keywords" required placeholder="iPhone 15 Pro 256G" />
-      <div class="row">
-        <div><label>最低价</label><input name="min_price" type="number" step="0.01" value="0" /></div>
-        <div><label>最高价 *</label><input name="max_price" type="number" step="0.01" required /></div>
-      </div>
-      <label>目标价 *</label>
-      <input name="target_price" type="number" step="0.01" required />
-      <label>成色要求</label>
-      <select name="condition_requirement">
-        <option>SEALED</option><option>UNBOXED</option>
-        <option selected>LIKE_NEW</option><option>LIGHTLY_USED</option>
-        <option>WELL_USED</option><option>FAIR</option><option>POOR</option>
-      </select>
-      <label>地域（可选）</label>
-      <input name="location" placeholder="同城 / 江浙沪" />
-      <label>排除关键词（逗号分隔）</label>
-      <input name="exclude_keywords" placeholder="碎屏, 拆机" />
-      <div class="row">
-        <div><label>最多候选数</label><input name="max_candidates" type="number" value="20" /></div>
-        <div><label>最多谈判数</label><input name="max_negotiate_count" type="number" value="5" /></div>
-      </div>
-      <label>参考图 URL（每行一个，可选）</label>
-      <textarea name="reference_images" placeholder="https://..."></textarea>
-      <label>图片匹配阈值 (0-1)</label>
-      <input name="image_match_threshold" type="number" step="0.05" value="0.6" />
-      <label>自定义指令</label>
-      <textarea name="custom_instructions" placeholder="必须带原装充电器..."></textarea>
-      <label>通知渠道</label>
-      <select name="notification_channel">
-        <option>IN_APP</option><option>EMAIL</option><option>WEBHOOK</option>
-      </select>
-      <div class="actions" style="margin-top: 12px;">
-        <button type="submit">创建并开始</button>
-      </div>
-    </form>
+<header>
+  <span class="dot"></span>
+  Goofish Agent · 流程管理
+</header>
 
-    <div class="section">
-      <h2>任务列表 <span id="task-count" style="color:#9ca3af;font-weight:normal;"></span></h2>
+<div class="layout">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-section" style="overflow-y:auto;flex:none;max-height:55vh;">
+      <h2>新建购买任务</h2>
+      <form id="create-form">
+        <label>平台 *</label>
+        <select name="platform" required>
+          <option value="goofish">闲鱼 (goofish)</option>
+          <option value="taobao">淘宝 (taobao)</option>
+          <option value="jd">京东 (jd)</option>
+          <option value="pdd">拼多多 (pdd)</option>
+        </select>
+        <label>搜索关键词 *</label>
+        <input name="keywords" required placeholder="iPhone 15 Pro 256G" />
+        <div class="row">
+          <div><label>最低价</label><input name="min_price" type="number" step="0.01" value="0" /></div>
+          <div><label>最高价 *</label><input name="max_price" type="number" step="0.01" required /></div>
+        </div>
+        <label>目标价 *</label>
+        <input name="target_price" type="number" step="0.01" required />
+        <label>成色要求</label>
+        <select name="condition_requirement">
+          <option>SEALED</option><option>UNBOXED</option>
+          <option selected>LIKE_NEW</option><option>LIGHTLY_USED</option>
+          <option>WELL_USED</option><option>FAIR</option><option>POOR</option>
+        </select>
+        <label>地域（可选）</label>
+        <input name="location" placeholder="同城 / 江浙沪" />
+        <label>排除关键词（逗号分隔）</label>
+        <input name="exclude_keywords" placeholder="碎屏, 拆机" />
+        <div class="row">
+          <div><label>最多候选数</label><input name="max_candidates" type="number" value="20" /></div>
+          <div><label>最多谈判数</label><input name="max_negotiate_count" type="number" value="5" /></div>
+        </div>
+        <label>参考图 URL（每行一个）</label>
+        <textarea name="reference_images" placeholder="https://..."></textarea>
+        <label>图片匹配阈值 (0-1)</label>
+        <input name="image_match_threshold" type="number" step="0.05" value="0.6" />
+        <label>自定义指令</label>
+        <textarea name="custom_instructions" placeholder="必须带原装充电器..."></textarea>
+        <label>通知渠道</label>
+        <select name="notification_channel">
+          <option>IN_APP</option><option>EMAIL</option><option>WEBHOOK</option>
+        </select>
+        <div style="margin-top:10px;">
+          <button type="submit" style="width:100%;">创建并开始</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="sidebar-section" style="flex:1;overflow-y:auto;padding:0;">
+      <div style="padding:10px 16px 6px;border-bottom:1px solid #1f2332;">
+        <h2 style="margin:0;">任务列表 <span id="task-count" style="color:#4b5563;font-weight:normal;text-transform:none;letter-spacing:0;"></span></h2>
+      </div>
       <div class="task-list" id="task-list"></div>
     </div>
   </div>
 
-  <div class="panel" id="detail">
-    <div class="empty">← 从左侧选择一个任务以查看流程进度</div>
+  <!-- Main -->
+  <div class="main">
+    <!-- Progress bar + controls -->
+    <div class="progress-bar-area" id="progress-area">
+      <div class="empty" style="color:#4b5563;padding:8px 0;">← 从左侧选择或创建任务</div>
+    </div>
+
+    <!-- Log + Tables -->
+    <div class="main-body">
+      <!-- Log console -->
+      <div class="log-console">
+        <div class="log-header">
+          <div class="indicator">
+            <div class="live-dot" id="live-dot"></div>
+            <span>推理日志（实时）</span>
+          </div>
+          <button class="secondary" style="padding:3px 8px;font-size:11px;" onclick="clearLog()">清空</button>
+        </div>
+        <div id="log-output"></div>
+        <div class="log-controls">
+          <input type="checkbox" id="auto-scroll-cb" checked />
+          <label for="auto-scroll-cb">自动滚动到底部</label>
+        </div>
+      </div>
+
+      <!-- Tables -->
+      <div class="tables-panel" id="tables-panel">
+        <div class="empty" style="margin-top:40px;">选择任务后显示候选商品与谈判结果</div>
+      </div>
+    </div>
   </div>
 </div>
+
 <div class="toast" id="toast"></div>
 
 <script>
 const PHASES = ["searching","assessing","favoriting","chatting","negotiating","notifying"];
-const PHASE_LABELS = {searching:"搜索",assessing:"鉴定",favoriting:"收藏",chatting:"沟通",negotiating:"谈判",notifying:"通知"};
+const PHASE_LABELS = {searching:"🔍 搜索",assessing:"🔬 鉴定",favoriting:"⭐ 收藏",chatting:"💬 沟通",negotiating:"💰 谈判",notifying:"📣 通知"};
 const TERMINAL = ["completed","failed","cancelled","error"];
+
 let selectedTaskId = null;
 let pollTimer = null;
+let logEvtSource = null;
+let logLineCount = 0;
+const MAX_LOG_LINES = 2000;
 
+// ── Toast ─────────────────────────────────────────────────────────────
 function toast(msg) {
   const t = document.getElementById("toast");
   t.textContent = msg; t.classList.add("show");
-  setTimeout(() => t.classList.remove("show"), 2000);
+  setTimeout(() => t.classList.remove("show"), 2500);
 }
 
+// ── Fetch helper ──────────────────────────────────────────────────────
 async function api(path, opts={}) {
   const r = await fetch(path, opts);
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
 
+// ── Log console ───────────────────────────────────────────────────────
+function classifyLine(line) {
+  if (/ERROR|CRITICAL/i.test(line)) return "error";
+  if (/WARNING|WARN/i.test(line)) return "warn";
+  if (/关键词Agent|大模型|LLM|VLM|推理|optimize|relevance/i.test(line)) return "llm";
+  if (/品相鉴定|Assessor|assessor/i.test(line)) return "assess";
+  if (/搜索|Searcher|searcher|search_parser/i.test(line)) return "search";
+  if (/沟通|谈判|Chatter|Negotiator|chatter|negotiator/i.test(line)) return "chat";
+  return "info";
+}
+
+function appendLog(line) {
+  const out = document.getElementById("log-output");
+  const div = document.createElement("div");
+  div.className = "log-line " + classifyLine(line);
+  div.textContent = line;
+  out.appendChild(div);
+  logLineCount++;
+  // 超过上限时删掉最早的行
+  if (logLineCount > MAX_LOG_LINES) {
+    out.removeChild(out.firstChild);
+    logLineCount--;
+  }
+  if (document.getElementById("auto-scroll-cb").checked) {
+    out.scrollTop = out.scrollHeight;
+  }
+}
+
+function clearLog() {
+  document.getElementById("log-output").innerHTML = "";
+  logLineCount = 0;
+}
+
+function startLogStream() {
+  if (logEvtSource) { logEvtSource.close(); logEvtSource = null; }
+  const dot = document.getElementById("live-dot");
+  dot.style.background = "#22c55e";
+
+  logEvtSource = new EventSource("/api/logs/stream?last_n=300");
+  logEvtSource.onmessage = (e) => {
+    if (e.data && e.data.trim()) appendLog(e.data);
+  };
+  logEvtSource.onerror = () => {
+    dot.style.background = "#ef4444";
+    // 5s 后重连
+    setTimeout(startLogStream, 5000);
+  };
+}
+
+// ── Form submit ───────────────────────────────────────────────────────
 document.getElementById("create-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const fd = new FormData(e.target);
@@ -137,11 +301,11 @@ document.getElementById("create-form").addEventListener("submit", async (e) => {
     target_price: parseFloat(fd.get("target_price")),
     condition_requirement: fd.get("condition_requirement"),
     location: fd.get("location") || null,
-    exclude_keywords: (fd.get("exclude_keywords") || "").split(",").map(s=>s.trim()).filter(Boolean),
+    exclude_keywords: (fd.get("exclude_keywords")||"").split(",").map(s=>s.trim()).filter(Boolean),
     max_candidates: parseInt(fd.get("max_candidates")) || 20,
     max_negotiate_count: parseInt(fd.get("max_negotiate_count")) || 5,
-    reference_images: (fd.get("reference_images") || "").split("\n").map(s=>s.trim()).filter(Boolean),
-    image_match_threshold: parseFloat(fd.get("image_match_threshold") || 0.6),
+    reference_images: (fd.get("reference_images")||"").split("\n").map(s=>s.trim()).filter(Boolean),
+    image_match_threshold: parseFloat(fd.get("image_match_threshold")||0.6),
     custom_instructions: fd.get("custom_instructions") || null,
     notification_channel: fd.get("notification_channel"),
   };
@@ -149,100 +313,116 @@ document.getElementById("create-form").addEventListener("submit", async (e) => {
     const task = await api("/api/tasks/", {
       method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body),
     });
-    toast("任务已创建");
+    toast("任务已创建，开始执行");
     e.target.reset();
     await loadTasks();
     selectTask(task.id);
   } catch (err) { toast("创建失败: " + err.message); }
 });
 
+// ── Task list ─────────────────────────────────────────────────────────
 async function loadTasks() {
-  const data = await api("/api/tasks/");
-  const tasks = (data.tasks || []).slice().sort((a,b) => (b.updated_at||"").localeCompare(a.updated_at||""));
+  const data = await api("/api/tasks/").catch(() => ({tasks:[]}));
+  const tasks = (data.tasks||[]).slice().sort((a,b) => (b.updated_at||"").localeCompare(a.updated_at||""));
   document.getElementById("task-count").textContent = `(${tasks.length})`;
   const list = document.getElementById("task-list");
   if (!tasks.length) { list.innerHTML = '<div class="empty">暂无任务</div>'; return; }
   list.innerHTML = tasks.map(t => `
-    <div class="task-item ${t.id === selectedTaskId ? 'active' : ''}" data-id="${t.id}">
-      <div class="kw">${escapeHtml(t.keywords)} <span class="status-tag status-${t.status}">${t.status}</span></div>
-      <div class="meta">${t.platform} · ${t.current_phase || '-'} · ¥${t.target_price}/${t.max_price}</div>
+    <div class="task-item ${t.id===selectedTaskId?'active':''}" data-id="${t.id}">
+      <div class="kw">${esc(t.keywords)} <span class="status-tag status-${t.status}">${t.status}</span></div>
+      <div class="meta">${t.platform} · ${t.current_phase||'待开始'} · ¥${t.target_price}→¥${t.max_price}</div>
     </div>`).join("");
   list.querySelectorAll(".task-item").forEach(el =>
     el.addEventListener("click", () => selectTask(el.dataset.id))
   );
 }
 
-function escapeHtml(s) { return (s||"").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
+function esc(s) { return (s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
 
+// ── Select task ───────────────────────────────────────────────────────
 function selectTask(id) {
   selectedTaskId = id;
   document.querySelectorAll(".task-item").forEach(el =>
-    el.classList.toggle("active", el.dataset.id === id));
+    el.classList.toggle("active", el.dataset.id===id));
   if (pollTimer) clearInterval(pollTimer);
   renderDetail();
   pollTimer = setInterval(renderDetail, 2000);
 }
 
+// ── Render detail ─────────────────────────────────────────────────────
 async function renderDetail() {
   if (!selectedTaskId) return;
   try {
     const [progress, candidates, negotiations] = await Promise.all([
       api(`/api/tasks/${selectedTaskId}/progress`),
-      api(`/api/results/${selectedTaskId}/candidates`).catch(() => ({candidates: []})),
-      api(`/api/results/${selectedTaskId}/negotiations`).catch(() => ({negotiations: []})),
+      api(`/api/results/${selectedTaskId}/candidates`).catch(() => ({candidates:[]})),
+      api(`/api/results/${selectedTaskId}/negotiations`).catch(() => ({negotiations:[]})),
     ]);
-    drawDetail(progress, candidates, negotiations);
+    drawProgress(progress);
+    drawTables(candidates, negotiations, progress);
     if (TERMINAL.includes(progress.status) && pollTimer) {
       clearInterval(pollTimer); pollTimer = null;
     }
-  } catch (err) { /* ignore */ }
+  } catch { /* ignore transient */ }
 }
 
-function drawDetail(p, c, n) {
-  const isFailed = ["FAILED","ERROR","CANCELLED"].includes(p.status);
+function drawProgress(p) {
+  const isFailed = ["failed","error","cancelled"].includes(p.status);
   const currentIdx = p.current_phase ? PHASES.indexOf(p.current_phase) : -1;
-  const phasesHtml = PHASES.map((ph, i) => {
+  const phasesHtml = PHASES.map((ph,i) => {
     let cls = "phase";
-    if (p.status === "completed") cls += " done";
-    else if (isFailed && i === currentIdx) cls += " failed";
+    if (p.status==="completed") cls += " done";
+    else if (isFailed && i===currentIdx) cls += " failed";
     else if (i < currentIdx) cls += " done";
-    else if (i === currentIdx) cls += " current";
+    else if (i===currentIdx) cls += " current";
     return `<div class="${cls}">${PHASE_LABELS[ph]}</div>`;
   }).join("");
-  const cands = (c.candidates || []);
-  const negs = (n.negotiations || []);
-  document.getElementById("detail").innerHTML = `
-    <h2>任务 ${p.task_id.slice(0,8)} · <span class="status-tag status-${p.status}">${p.status}</span></h2>
+
+  document.getElementById("progress-area").innerHTML = `
+    <div class="task-title-row">
+      <h3>${esc(p.keywords||'')} <span style="font-weight:400;color:#6b7280;font-size:12px;">${p.task_id.slice(0,8)}</span></h3>
+      <span class="status-tag status-${p.status}">${p.status}</span>
+    </div>
     <div class="phases">${phasesHtml}</div>
     <div class="actions">
       <button class="secondary" onclick="doAction('pause')" ${p.status!=='running'?'disabled':''}>暂停</button>
       <button class="danger" onclick="doAction('cancel')" ${TERMINAL.includes(p.status)?'disabled':''}>取消</button>
-    </div>
-    <div class="section">
-      <h2>候选商品 (${cands.length})</h2>
+    </div>`;
+}
+
+function drawTables(c, n, p) {
+  const cands = c.candidates || [];
+  const negs = n.negotiations || [];
+  document.getElementById("tables-panel").innerHTML = `
+    <div>
+      <div class="section-title">候选商品 (${cands.length})</div>
       ${cands.length ? `<table><thead><tr><th>标题</th><th>价格</th><th>卖家</th><th>状态</th><th>评分</th></tr></thead><tbody>
-        ${cands.map(x => `<tr><td>${escapeHtml(x.title||'')}</td><td>¥${x.price}</td><td>${escapeHtml(x.seller_name||'')}</td><td>${x.status}</td><td>${(x.initial_score??0).toFixed(2)}</td></tr>`).join("")}
-      </tbody></table>` : '<div class="empty">暂无候选</div>'}
+        ${cands.map(x=>`<tr><td title="${esc(x.title)}">${esc((x.title||'').slice(0,28))}…</td><td>¥${x.price}</td><td>${esc(x.seller_name||'')}</td><td>${x.status}</td><td>${(x.initial_score??0).toFixed(2)}</td></tr>`).join("")}
+      </tbody></table>` : '<div class="empty">暂无候选商品</div>'}
     </div>
-    <div class="section">
-      <h2>谈判结果 (${negs.length})</h2>
-      ${negs.length ? `<table><thead><tr><th>卖家</th><th>初始价</th><th>目标价</th><th>成交价</th><th>轮次</th><th>状态</th></tr></thead><tbody>
-        ${negs.map(x => `<tr><td>${escapeHtml(x.seller_name||x.conversation_id||'')}</td><td>¥${x.initial_price??'-'}</td><td>¥${x.target_price??'-'}</td><td>${x.agreed_price?('¥'+x.agreed_price):'-'}</td><td>${x.round_count??0}</td><td>${x.status}</td></tr>`).join("")}
+    <div>
+      <div class="section-title">谈判记录 (${negs.length})</div>
+      ${negs.length ? `<table><thead><tr><th>卖家</th><th>初始</th><th>目标</th><th>成交</th><th>轮次</th><th>状态</th></tr></thead><tbody>
+        ${negs.map(x=>`<tr><td>${esc(x.seller_name||x.conversation_id||'').slice(0,12)}</td><td>¥${x.initial_price??'-'}</td><td>¥${x.target_price??'-'}</td><td>${x.agreed_price?'¥'+x.agreed_price:'-'}</td><td>${x.round_count??0}</td><td>${x.status}</td></tr>`).join("")}
       </tbody></table>` : '<div class="empty">暂无谈判记录</div>'}
     </div>
-    ${p.result_summary ? `<div class="section"><h2>结果摘要</h2><pre style="background:#f9fafb;padding:10px;border-radius:4px;font-size:12px;overflow:auto;">${escapeHtml(JSON.stringify(p.result_summary,null,2))}</pre></div>` : ''}
-  `;
+    ${p.result_summary ? `<div>
+      <div class="section-title">结果摘要</div>
+      <pre class="summary">${esc(JSON.stringify(p.result_summary,null,2))}</pre>
+    </div>` : ''}`;
 }
 
 async function doAction(kind) {
   if (!selectedTaskId) return;
   try {
-    await api(`/api/tasks/${selectedTaskId}/${kind}`, { method: "POST" });
-    toast(kind === "pause" ? "已暂停" : "已取消");
+    await api(`/api/tasks/${selectedTaskId}/${kind}`, {method:"POST"});
+    toast(kind==="pause"?"已暂停":"已取消");
     renderDetail(); loadTasks();
-  } catch (err) { toast("操作失败: " + err.message); }
+  } catch (err) { toast("操作失败: "+err.message); }
 }
 
+// ── Init ──────────────────────────────────────────────────────────────
+startLogStream();
 loadTasks();
 setInterval(loadTasks, 3000);
 </script>
