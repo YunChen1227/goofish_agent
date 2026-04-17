@@ -2,18 +2,18 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import Column, Integer
+from sqlalchemy import Column
 from sqlalchemy import JSON
 from sqlmodel import Field, SQLModel
 
-from .enums import ConditionGrade
+from .enums import ConditionGrade, ConditionGradeColumn
 
 
 class AssessmentReport(SQLModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     candidate_id: UUID = Field(foreign_key="productcandidate.id")
     condition_grade: ConditionGrade = Field(
-        sa_column=Column(Integer, nullable=False)
+        sa_column=Column(ConditionGradeColumn(), nullable=False)
     )
     condition_score: float
     defects: list[dict] = Field(default=[], sa_column=Column(JSON, default=[]))

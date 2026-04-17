@@ -1,5 +1,7 @@
 from enum import Enum
 
+from sqlalchemy import Integer, TypeDecorator
+
 
 class PlatformType(str, Enum):
     GOOFISH = "goofish"
@@ -85,3 +87,22 @@ class ConditionGrade(int, Enum):
     @property
     def score(self) -> int:
         return self.value
+
+
+class ConditionGradeColumn(TypeDecorator):
+    """Store as INTEGER; coerce ORM loads to ConditionGrade (not bare int)."""
+
+    impl = Integer
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if isinstance(value, ConditionGrade):
+            return value.value
+        return int(value)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        return ConditionGrade(int(value))

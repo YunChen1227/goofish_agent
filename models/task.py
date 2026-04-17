@@ -2,12 +2,13 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import Column, Integer
+from sqlalchemy import Column
 from sqlalchemy import JSON
 from sqlmodel import Field, SQLModel
 
 from .enums import (
     ConditionGrade,
+    ConditionGradeColumn,
     NotificationChannel,
     PlatformType,
     TaskPhase,
@@ -24,7 +25,7 @@ class Task(SQLModel, table=True):
     max_price: float
     target_price: float
     condition_requirement: ConditionGrade = Field(
-        sa_column=Column(Integer, nullable=False)
+        sa_column=Column(ConditionGradeColumn(), nullable=False)
     )
     location: Optional[str] = None
     exclude_keywords: list[str] = Field(default=[], sa_column=Column(JSON, default=[]))

@@ -1,9 +1,23 @@
 from __future__ import annotations
 
+import os
+import sys
+
+# Running as `python path/to/goofish_agent/main.py` puts this package directory
+# first on sys.path, so bare `import platform` (e.g. from SQLAlchemy) resolves to
+# our `goofish_agent/platform/` package instead of the stdlib.
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+if sys.path and os.path.realpath(sys.path[0]) == os.path.realpath(_script_dir):
+    sys.path.pop(0)
+    _parent = os.path.dirname(_script_dir)
+    if os.path.realpath(_parent) not in {
+        os.path.realpath(p) for p in sys.path
+    }:
+        sys.path.insert(0, _parent)
+
 import argparse
 import asyncio
 import json
-import sys
 from uuid import UUID, uuid4
 
 
