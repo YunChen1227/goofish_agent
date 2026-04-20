@@ -1,6 +1,6 @@
 # Goofish Agent（二手平台买家 Agent）
 
-自动化在**可配置平台**上按你的条件搜索商品、评估、沟通与谈价的代理程序。支持 **闲鱼（`goofish`）**、淘宝二手、京东二手、拼多多等（见下方「支持的平台」）；**每次任务须显式指定 `platform`，不设隐式默认**。提供 **命令行** 与 **HTTP API** 两种使用方式。
+自动化在**可配置平台**上按你的条件搜索商品、评估、沟通与谈价的代理程序。支持 **闲鱼（`goofish`）**、淘宝二手、京东二手、拼多多等（见下方「支持的平台」）；**每次任务须显式指定 `platform`，不设隐式默认**。提供 **Web 页面（流程管理展示）** 与 **HTTP API** 两种使用方式。
 
 ---
 
@@ -93,75 +93,38 @@ export PYTHONPATH=/path/to/workspace
 
 ---
 
-### 2. 命令行（CLI）
+### 2. 启动 Web 服务
 
 在项目上一级目录执行：
 
 ```bash
-python -m goofish_agent.main --help
+python -m goofish_agent.main
 ```
 
-#### 子命令：`run`（执行一次购买任务）
+默认通过 Uvicorn 加载 `goofish_agent.api.app:app`，监听 **`0.0.0.0:8000`**，并开启自动重载。常用参数：
 
-**平台（必须显式指定其一）：**
+- `--host`：监听地址（默认 `0.0.0.0`）
+- `--port`：监听端口（默认 `8000`）
+- `--no-reload`：关闭自动重载
 
-- 命令行：`--platform`，取值为 `goofish`（闲鱼）、`taobao`、`jd`、`pdd`、`custom`。
-- 或使用 **`--config` 指向的 JSON** 里的 **`"platform"`** 字段。
-- 若两者都未提供有效平台，程序会报错退出（退出码 2）。
+启动后在浏览器打开：
 
-**`goofish` 即闲鱼**：参数名在代码中为 `goofish`，对应站点为闲鱼。
-
-必填参数：
-
-- `--platform` **或** JSON 中的 `platform`（见上）
-- `--keywords`：搜索关键词
-- `--max-price`：可接受的最高价格（元）
-- `--target-price`：目标/心理价位（元）
-
-常用可选参数：
-
-- `--condition`：成色要求，对应 `ConditionGrade` 枚举名，默认 `LIKE_NEW`（如 `SEALED`、`LIKE_NEW`、`LIGHTLY_USED` 等）
-- `--location`：地域筛选
-- `--reference-images`：零个或多个参考图路径（可多次或空格分隔，视你 shell 而定）
-- `--config`：JSON 配置文件路径；文件中的 `platform`、`keywords`、`max_price`、`target_price`、`condition`、`location`、`reference_images` 可覆盖或与命令行合并，其余键会合并进任务模型（**若仅用配置文件指定平台，则 JSON 内必须含 `platform`**）
-
-示例（闲鱼，须写 `--platform`）：
-
-```bash
-python -m goofish_agent.main run ^
-  --platform goofish ^
-  --keywords "iPhone 15 Pro" ^
-  --max-price 6000 ^
-  --target-price 5500 ^
-  --condition LIKE_NEW
-```
-
-示例（京东）：
-
-```bash
-python -m goofish_agent.main run --platform jd --keywords "iPhone 15" --max-price 5000 --target-price 4500
-```
-
-（Linux/macOS 把 `^` 换成 `\` 续行或写成一行。）
-
-#### 子命令：`server`（启动 API）
-
-默认通过 Uvicorn 加载 `goofish_agent.api.app:app`，监听 **`0.0.0.0:8000`**，并开启 **reload**。
-
-```bash
-python -m goofish_agent.main server
-```
-
-启动后：
-
+- **页面（推荐）**：`http://localhost:8000/` — 创建任务 / 任务列表 / 6 阶段流程进度 / 候选与谈判结果
 - 健康检查：`GET http://localhost:8000/health`
-- OpenAPI 文档：浏览器打开 `http://localhost:8000/docs`（FastAPI 自动生成）
+- OpenAPI 文档：`http://localhost:8000/docs`
+
+#### 页面使用
+
+1. 左栏「创建购买任务」填写平台、关键词、最高价、目标价等，点击 **创建并开始**。
+2. 下方「任务列表」显示所有任务，点击任一行可进入右栏详情。
+3. 右栏展示 6 阶段横向进度条（搜索 → 鉴定 → 收藏 → 沟通 → 谈判 → 通知），**蓝色**为当前阶段、**绿色**为已完成、**红色**为失败；下方实时刷新候选商品表与谈判结果表；可点击「暂停 / 取消」。
+4. 页面每 2 秒轮询 `/api/tasks/{id}/progress` 获取最新状态，无需手动刷新。
 
 ---
 
-### 3. HTTP API
+### 3. HTTP API（页面底层调用）
 
-路由前缀（见 `api/app.py`）：
+页面所有功能均通过下列 API 实现，可直接用 `curl` / 脚本调用：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -169,6 +132,7 @@ python -m goofish_agent.main server
 | `POST` | `/api/tasks/` | 创建任务（请求体为 JSON，见下表） |
 | `GET` | `/api/tasks/` | 列出所有任务 |
 | `GET` | `/api/tasks/{task_id}` | 查询单个任务 |
+| `GET` | `/api/tasks/{task_id}/progress` | 查询 6 阶段进度（`status` / `current_phase` / `phase_order`） |
 | `POST` | `/api/tasks/{task_id}/pause` | 暂停任务 |
 | `POST` | `/api/tasks/{task_id}/cancel` | 取消任务 |
 | `GET` | `/api/results/{task_id}/candidates` | 某任务的候选商品 |

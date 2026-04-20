@@ -33,10 +33,10 @@
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                      用户层 (User Layer)                 │
-│  ┌──────────┐  ┌──────────────┐  ┌───────────────────┐  │
-│  │ CLI 终端  │  │ Web Dashboard│  │ 消息通知 (回调)    │  │
-│  └────┬─────┘  └──────┬───────┘  └────────┬──────────┘  │
-│       └───────────────┼───────────────────┘              │
+│            ┌──────────────┐  ┌───────────────────┐       │
+│            │ Web Dashboard│  │ 消息通知 (回调)    │       │
+│            └──────┬───────┘  └────────┬──────────┘       │
+│                   └───────────────────┘                  │
 └───────────────────────┼──────────────────────────────────┘
                         │
 ┌───────────────────────▼──────────────────────────────────┐
@@ -150,10 +150,10 @@ Agent 统一使用以下品相等级体系对商品进行评估：
 | 有瑕疵 | `FAIR` | 5 | 有可见损伤但核心功能正常 |
 | 较差 | `POOR` | 4 | 明显损伤，部分功能受影响 |
 
-### 4.4 CLI 与任务表字段补充
+### 4.4 入口与任务表字段补充
 
-- **入口**：`python -m goofish_agent.main run --platform goofish|taobao|jd|pdd|custom --keywords ... --max-price ... --target-price ...`，可选 `--reference-images`、`--config` JSON。
-- **Task.platform**：与 CLI `--platform` 对应，决定 `PlatformConfig`（搜索/详情 URL 与列表页 CSS 选择器）。
+- **入口**：`python -m goofish_agent.main` 启动 Web 服务（默认 `0.0.0.0:8000`）。浏览器打开 `http://localhost:8000/` 即可填写购买任务并查看 6 阶段流程进度；底层复用 `POST /api/tasks/`。
+- **Task.platform**：对应表单 / API 中的 `platform` 字段，决定 `PlatformConfig`（搜索/详情 URL 与列表页 CSS 选择器）。
 - **数据库**：默认 `sqlite:///buyer_agent.db`（`BUYER_AGENT_DATABASE_URL` 可覆盖）。
 - **模型与密钥**：`BUYER_AGENT_LLM_*` / `BUYER_AGENT_VLM_*`（OpenAI 兼容端点，默认 DashScope compatible-mode）。
 
@@ -1046,6 +1046,7 @@ RUNNING 内部阶段流转:
 | **搜索列表相关性** | LLM 批量判定标题 vs用户关键词意图 | 子串匹配无法处理行话、异名同物；与 KeywordOptimizer 配合减少无效详情请求 |
 | **无结果页** | SearchParser 识别「猜你喜欢」等兜底 | 避免把推荐流当真实搜索结果，减少后续污染 |
 | **关键词优化** | 独立 KeywordOptimizer + 结构化 JSON | 可记录推理链；解析多层兜底避免把整段模型输出当搜索词 |
+| **用户入口** | Web 页面替代 CLI | 非技术用户可直接使用，且可直观观察 6 阶段流水线（搜索 → 鉴定 → 收藏 → 沟通 → 谈判 → 通知）进展；底层复用现有 HTTP API |
 
 ---
 
@@ -1097,9 +1098,10 @@ goofish_agent/
 ├── models/                      # SQLModel 表
 ├── schemas/                     # Pydantic API Schema
 ├── api/                         # FastAPI应用与 routes
+├── static/                      # Web 前端（index.html 单页，流程管理展示）
 ├── storage/                     # database.py、media_store.py
 ├── utils/                       # retry、rate_limiter、crypto
-├── main.py                      # CLI: run / server
+├── main.py                      # Web 服务入口（uvicorn 启动 FastAPI + 静态页面）
 ├── requirements.txt
 ├── README.md
 └── DESIGN.md

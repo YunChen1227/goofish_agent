@@ -9,6 +9,11 @@
 """
 
 from goofish_agent.skills.base import BaseSkill, SkillResult
+from goofish_agent.skills.image_acquisition_skill import (
+    ImageAcquisitionInput,
+    ImageAcquisitionResult,
+    ImageAcquisitionSkill,
+)
 from goofish_agent.skills.keyword_retry_skill import (
     KeywordRetryInput,
     KeywordRetryResult,
@@ -37,4 +42,7 @@ __all__ = [
     "SimilarityMatchSkill",
     "SimilarityMatchInput",
     "SimilarityMatchResult",
+    "ImageAcquisitionSkill",
+    "ImageAcquisitionInput",
+    "ImageAcquisitionResult",
 ]
