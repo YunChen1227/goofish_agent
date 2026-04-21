@@ -152,7 +152,7 @@ Agent 统一使用以下品相等级体系对商品进行评估：
 
 ### 4.4 入口与任务表字段补充
 
-- **入口**：`python -m goofish_agent.main` 启动 Web 服务（默认 `0.0.0.0:8000`）。浏览器打开 `http://localhost:8000/` 即可填写购买任务并查看 6 阶段流程进度；底层复用 `POST /api/tasks/`。
+- **入口**：`python -m goofish_agent.main` 启动 Web 服务（默认 `0.0.0.0:8000`）。浏览器打开 `http://localhost:8000/` 即可填写购买任务并查看 6 阶段流程进度；底层复用 `POST /api/tasks/`。任务处于 `paused` / `error` 时可 `POST /api/tasks/{id}/resume` 或点击「续跑」断点续跑（见 §5.0、§11.2）。
 - **Task.platform**：对应表单 / API 中的 `platform` 字段，决定 `PlatformConfig`（搜索/详情 URL 与列表页 CSS 选择器）。
 - **数据库**：默认 `sqlite:///buyer_agent.db`（`BUYER_AGENT_DATABASE_URL` 可覆盖）。
 - **模型与密钥**：`BUYER_AGENT_LLM_*` / `BUYER_AGENT_VLM_*`（OpenAI 兼容端点，默认 DashScope compatible-mode）。
@@ -164,16 +164,20 @@ Agent 统一使用以下品相等级体系对商品进行评估：
 ### 5.0 编排与状态 (`core/task_manager.py` + `core/state_machine.py`)
 
 - **`TaskManager.initialize()`**：`create_platform_client(platform)` → `VLMClient` / `LLMClient` / `MarketAnalyzer` / `MediaStore` → `await client.start()`。
-- **`run_task(task_id)`**：`get_session` 取 `Task` → `StateMachine.transition(RUNNING)` → `_execute_phases`。
-- **`_execute_phases` 顺序**（每步 `StateMachine.advance_phase` + `session.commit`）:
-  1. `Notifier.notify_progress` → `Searcher(client, vlm, llm, session).execute(task)`
+- **`run_task(task_id)`**：`get_session` 取 `Task` → `StateMachine.transition(RUNNING)` → `_execute_phases`。若任务从 **`PAUSED` / `ERROR` 恢复**（`current_phase` 非空且原状态为暂停或错误），视为**断点续跑**：不重置 `current_phase`，后续按阶段跳过逻辑执行。
+- **浏览器被用户关闭**：`goofish_platform/client.py` 监听 `Page` / `BrowserContext` 的 `close` 事件（非程序主动 `close()` 时）置位；`GoofishClient` 将 Playwright 的「目标已关闭」类异常统一映射为 `BrowserClosedByUserError`。`TaskManager.run_task` 捕获后把任务置为 **`ERROR`** 并向上抛出，任务终止。
+- **`resume_task(task_id)`**：仅允许 `PAUSED` / `ERROR` → 调用 `run_task`。**不会**把 `current_phase` 清空（与早期「恢复后从头跑」的简化实现不同）。
+- **HTTP API**：`POST /api/tasks/{id}/resume` 触发续跑；页面「续跑」按钮调用同一接口。
+- **`_execute_phases` 六阶段**（每进入一阶段用 **`_set_phase(task, phase)`** 写入 `task.current_phase` 并 `commit`）:
+  1. **SEARCHING**：若 `_should_skip_phase`（`current_phase` 已严格晚于 SEARCHING）则从数据库加载 `ProductCandidate` 列表，否则执行 `Searcher.execute`。
   2. 无候选 → `FAILED` + `notify_failure({"filtered": 0})`
-  3. `Assessor(vlm, media, session).execute` → 无 `ACTIVE` → `FAILED` + `assessment_rejected`
-  4. `Favoriter.execute` → `notify_progress`
-  5. `Chatter(client, llm, session).execute` → 无 `ChatStatus.READY` → `FAILED` + `chat_failed`
-  6. `Negotiator(client, llm, market, session).execute`
-  7. 有 `NegotiationStatus.AGREED` → `notify_deal` + `COMPLETED`；否则 `notify_failure` + `FAILED`
-- **`StateMachine`**：`VALID_TRANSITIONS` 约束 `TaskStatus`；`PHASE_ORDER` 为 SEARCHING → … → NOTIFYING；`advance_phase` 在 `current_phase is None` 时置为第一阶段。
+  3. **ASSESSING**：若已跳过则加载 `AssessmentReport`；否则 `Assessor.execute`（**并发**鉴定，见 §5.3 / §6.5）。无合格候选 → `FAILED` + `assessment_rejected`
+  4. **FAVORITING**：若已跳过则按 `initial_score` 重算 top-N；否则 `Favoriter.execute` → `notify_progress`
+  5. **CHATTING**：若已跳过则从 DB 加载 `SellerConversation`；否则 `Chatter.execute` → 无 `ChatStatus.READY` → `FAILED` + `chat_failed`
+  6. **NEGOTIATING**：若已跳过则加载 `NegotiationRecord`；否则 `Negotiator.execute`
+  7. **NOTIFYING**：有 `NegotiationStatus.AGREED` → `notify_deal` + `COMPLETED`；否则 `notify_failure` + `FAILED`
+- **`_should_skip_phase(task, phase)`**：比较 `PHASE_ORDER` 中 `task.current_phase` 与 `phase` 的下标；若当前阶段**已经严格晚于**本阶段，则本阶段整段跳过并从 DB 取数（阶段级断点）。
+- **`StateMachine`**：`VALID_TRANSITIONS` 约束 `TaskStatus`；`PHASE_ORDER` 为 SEARCHING → … → NOTIFYING；`advance_phase` 仍存在于 `state_machine.py`，**编排侧**以 `_set_phase` + 跳过逻辑为主。
 
 ### 5.1 整体流程
 
@@ -266,8 +270,10 @@ Smart Search 循环（最多 1 + 3 轮平台搜索）
   · 有参考图：0.3×价格分 + 0.2×信用分 + 0.3×image_match + 0.2
   · 价格分：相对 target_price ~ max_price 线性归一化
 
-最后 session.add 全部候选并 commit。
-```
+每通过筛选并构造好的 `ProductCandidate` **立即** `session.add` + `commit`（非仅在 Phase 1 末尾一次性提交），以便进程崩溃或任务进入 `ERROR` 后仍能保留已入库商品。
+
+**断点缓存（搜索列表 + 商品页 URL）**  
+`_smart_search` 成功后、开始拉详情前，将本轮 **brief 列表**（含 `product_id`、`title`、`product_url` 等）写入 `task.result_summary["search_state"]`（见 §7.1）。续跑时若存在该缓存，则**跳过**平台再次搜索与 LLM 标题相关性判定，直接按缓存 brief 继续详情与过滤；同时按 `task_id` 查询已有 `platform_product_id`，**跳过**已入库商品，避免重复详情请求。
 
 **初筛规则（代码实际执行）**:
 - 搜索页：不做简单子串匹配；**相关性由 LLM 对标题批量判定**。
@@ -277,8 +283,15 @@ Smart Search 循环（最多 1 + 3 轮平台搜索）
 
 ### 5.3 Phase 2: 品相鉴定
 
-**输入**: 候选商品列表
+**输入**: 候选商品列表  
 **输出**: 品相评估报告 `List[AssessmentReport]`
+
+**并发与断点（与 `modules/assessor.py` 一致）**  
+- 启动前查询数据库中已存在的 `AssessmentReport`（按 `candidate_id`），**已有报告的商品不再调用 VLM**，仅合并进返回列表。  
+- 待鉴定列表使用 **`asyncio.Semaphore`** 限制并发（默认 `MAX_CONCURRENCY = 3`），多商品 **并行** 调用 `VLMClient.assess_product`。  
+- 每条报告生成后在与 `Session` 绑定的 **`asyncio.Lock`** 内 `add` + `commit`，保证单会话写库串行、且单条进度可持久化。  
+- `ImageAcquisitionHook` 若使用共享 Playwright `Page`，通过 **`asyncio.Lock`** 串行化「需页面」的截图分支，避免多协程同时驱动同一 `Page`。  
+- 若抛出 `BrowserClosedByUserError`（或映射后的页面关闭异常），`gather` 会取消其余协程并将错误上抛，由 `TaskManager` 将任务置为 `ERROR`。
 
 **执行步骤**:
 
@@ -474,9 +487,11 @@ Agent 在进入谈判前，通过多渠道采集价格数据，构建全面的�
 **具体实现** (`goofish_platform/client.py` — `GoofishClient`):
 
 - `BrowserEngine`：持久化 Chromium 上下文、`browser_data_dir`、可选代理。
-- `AuthManager`：Cookie 加载/保存、`ensure_logged_in`。
+- `AuthManager`：Cookie 加载/保存、`ensure_logged_in`（轮询登录过程中可注入 `user_closed_check`，避免用户关窗后仍无限等待）。
 - `AntiDetect`：`search`/`detail` 后 `random_browse_pause()`（约 3~15s）；发消息前有额外延迟。
 - `RateLimiterRegistry`：按 `config/settings.py` 对 search/detail/favorite/message 等限流。
+- **生命周期与用户关窗**：`start()` 后为当前 `Page` / `BrowserContext` 注册 `close` 监听；非程序主动关闭时置 `_user_closed_browser`。后续 `_ensure_page()` 会抛出 `BrowserClosedByUserError`（定义见 `goofish_platform/exceptions.py`）。`search` / `get_product_detail` 等异步路径经 `_run_with_page_guard`，将 Playwright「Target closed」类异常统一包装为同一错误类型，便于上层终止任务。
+- **`close()`**：置 `_intentional_close`，避免误报「用户关闭」。
 
 **运行时 DTO（非 ORM）**:
 
@@ -505,7 +520,8 @@ Agent 在进入谈判前，通过多渠道采集价格数据，构建全面的�
 - 依赖：`PlatformClient`、`VLMClient`、`LLMClient`、`KeywordOptimizer`、`Session`。
 - **常量**：`MAX_KEYWORD_OPTIMIZE_RETRIES = 3`；`MISMATCH_THRESHOLD = 0.8`（不相关率 ≥ 80% 触发换词）；详情最多处理 **10** 个商品（`MAX_DETAIL_ATTEMPTS`）。
 - **`_smart_search`**：循环搜索 → `SearchParser` 结果 → **LLM 批量判定标题与 `task.keywords` 意图是否相关** → 必要时调用 `KeywordOptimizer` → 换词后 **5~10s** 随机等待再搜。
-- **`execute`**：初筛通过后拉详情、`_passes_filters`、可选 VLM 图匹配、`_score_and_sort`、`session.commit` 写入 `ProductCandidate`。
+- **`execute`**：若 `task.result_summary` 中已有 **`search_state`**（见下），则跳过 `_smart_search` 与相关性判定，直接使用缓存的 brief 列表；否则在 `_smart_search` 成功后、拉详情前**持久化** `search_state`。初筛通过后拉详情、`_passes_filters`、可选 VLM 图匹配、`_score_and_sort`；**每个**通过筛选的 `ProductCandidate` 单独 `commit`；参考图匹配阶段对已写入 `image_match_score` 的记录跳过重算。
+- **`result_summary["search_state"]`**（JSON）：`keywords_used`、序列化后的 `briefs`（含 `product_url` 等）、`saved_at`。用于断点续跑时不必重复搜索与 LLM 预筛选。
 
 **初筛打分**（`Searcher._score_and_sort`，与 `Settings` 里 w_condition 等设计权重并存，Phase1 使用下列简化式）:
 
@@ -519,7 +535,12 @@ Agent 在进入谈判前，通过多渠道采集价格数据，构建全面的�
 
 **职责**: 利用多模态 AI 模型对商品品相进行智能评估。
 
-**评估流程**:
+**实现要点**（与 `modules/assessor.py` 一致）**  
+- 先查库中已存在的 `AssessmentReport`，**未评估的候选**才进入 VLM；支持**断点续跑**（任务在鉴定阶段中断后，已完成的报告不重复）。  
+- 多候选通过 **`asyncio.gather` + `Semaphore`** 并行鉴定；每条报告写入后在锁内 `commit`。  
+- 若配置了 `ImageAcquisitionHook` + Playwright `Page`，对 `acquire_for_candidate` 使用**页面锁**，避免并发操作同一 `Page`。
+
+**评估流程**（概念上仍为单商品管线；实际可多条并行）:
 ```
 获取商品图片/视频
        │
@@ -743,8 +764,8 @@ else P_seller > P_max:
 | `custom_instructions` | Text? | 用户自定义指令 |
 | `notification_channel` | `NotificationChannel` | `in_app` / `email` / `webhook` |
 | `status` | `TaskStatus` | 任务状态 |
-| `current_phase` | `TaskPhase?` | 当前阶段 |
-| `result_summary` | JSON? | 结果摘要 |
+| `current_phase` | `TaskPhase?` | 当前阶段（断点续跑时保留，不随 `resume` 清空） |
+| `result_summary` | JSON? | 结果摘要；其中 **`search_state`** 由 Searcher 写入，缓存已通过 LLM 相关性判定的 **搜索 brief 列表**（含 `product_url` 等），供任务中断后跳过重复搜索 |
 | `created_at` | DateTime | 创建时间 |
 | `updated_at` | DateTime | 更新时间 |
 
@@ -918,11 +939,11 @@ RUNNING 内部阶段流转:
 |----------|------|----------|------|
 | `PENDING` | 系统调度执行 | `RUNNING` | 进入搜索阶段 |
 | `RUNNING` | 用户暂停 | `PAUSED` | 保存当前进度，暂停所有操作 |
-| `PAUSED` | 用户恢复 | `RUNNING` | 从暂停点继续 |
+| `PAUSED` | 用户恢复（`POST /api/tasks/{id}/resume` 或页面「续跑」） | `RUNNING` | 从 `current_phase` 及已持久化数据断点继续（见 §11.2） |
 | `RUNNING` | 找到并达成交易 | `COMPLETED` | 通知用户后结束 |
 | `RUNNING` | 全流程无合适商品 | `FAILED` | 通知用户后结束 |
 | `RUNNING` | 系统异常 | `ERROR` | 记录错误，等待重试或人工介入 |
-| `ERROR` | 重试 | `RUNNING` | 从出错阶段重新执行 |
+| `ERROR` | 用户续跑（同上） | `RUNNING` | 从 `current_phase` 继续；典型原因：用户关闭浏览器导致 `BrowserClosedByUserError` |
 | `*` | 用户取消 | `CANCELLED` | 终态，不可恢复 |
 
 ---
@@ -1001,10 +1022,23 @@ RUNNING 内部阶段流转:
 
 ### 11.2 断点恢复
 
-- 每完成一个 Phase 后持久化当前进度快照
-- 每个 Phase 内的关键步骤（如每评估完一个商品）也会保存进度
-- 任务从 `ERROR` / `PAUSED` 恢复时，从最近的快照点继续执行
-- 避免重复操作（如已收藏的商品不再重复收藏）
+**阶段级**  
+- `Task.current_phase` 在每进入一阶段时更新（`_set_phase`），`resume` **不清空**该字段。  
+- `_execute_phases` 若发现 `current_phase` 已严格晚于某一阶段，则**跳过**该阶段整段逻辑，改为从数据库加载该阶段产出（候选、报告、对话、谈判记录等）。
+
+**Phase 1（Searcher）**  
+- `result_summary["search_state"]`：在 `_smart_search` 成功后写入完整 brief 列表（含商品页 URL），续跑时跳过搜索 + LLM 相关性判定。  
+- 每个通过筛选的 `ProductCandidate` **单独 commit**；续跑时用已有 `platform_product_id` 集合跳过已处理商品。  
+- 参考图匹配：已写入 `image_match_score` 的记录不重复调用 VLM `match_images`。
+
+**Phase 2（Assessor）**  
+- 已存在 `AssessmentReport` 的 `candidate_id` 跳过 VLM；未完成部分以并发协程继续，每条报告提交后落库。
+
+**API / UI**  
+- `POST /api/tasks/{id}/resume`；静态页任务详情区提供「续跑」按钮。
+
+**局限（当前实现）**  
+- Phase 4 / 5 若半道中断，续跑时采用「整阶段跳过则从 DB 加载」策略；未完全做到对话/谈判轮次内的细粒度断点（可后续扩展）。
 
 ### 11.3 降级策略
 
@@ -1037,7 +1071,8 @@ RUNNING 内部阶段流转:
 | **平台交互方式** | 统一使用 Playwright 浏览器自动化 | 闲鱼无公开 API，浏览器自动化功能覆盖最全面，且便于处理动态渲染页面；统一方案降低维护复杂度 |
 | **品相评估方式** | 多模态 VLM 而非传统 CV | 二手商品品相判断需要语义理解（如"正常使用痕迹"），纯 CV 难以胜任 |
 | **对话与谈判分离** | 两个独立模块 | 信息收集和价格谈判的目标、策略、话术风格不同，分离可降低复杂度 |
-| **任务编排方式** | 顺序阶段 + 阶段内并行 | 各 Phase 有严格依赖关系（先搜索才能评估），但同阶段内多个商品可并行处理 |
+| **任务编排方式** | 顺序阶段 + 阶段内并行 | 各 Phase 有严格依赖关系（先搜索才能评估）；**品相鉴定**阶段对多商品 VLM 调用并发执行（有并发上限与写库锁） |
+| **断点续跑** | `current_phase` + DB 实体 + `search_state` | 用户暂停、浏览器被关（`ERROR`）后可续跑；搜索列表与已入库候选、已生成鉴定报告均不重复浪费 |
 | **数据库选型** | SQLite (dev) / PostgreSQL (prod) | 开发期零依赖快速迭代，生产环境可平滑切换 |
 | **并发卖家沟通** | 串行轮询而非真并行 | 避免同一时间段内发起过多对话触发风控 |
 | **谈判策略** | LLM 动态生成而非规则引擎 | 谈判场景多变，硬编码规则难以覆盖所有情况，LLM 可灵活应对 |
@@ -1069,6 +1104,7 @@ goofish_agent/
 │
 ├── goofish_platform/            # Playwright 实现（多平台共用 GoofishClient + Config）
 │   ├── client.py                # GoofishClient：search / detail / 限流 / 反爬暂停
+│   ├── exceptions.py            # BrowserClosedByUserError、TargetClosed 类错误判别
 │   ├── browser.py               # BrowserEngine 持久化上下文
 │   ├── auth.py                  # AuthManager、登录与 Cookie
 │   ├── anti_detect.py           # 随机延迟、人类化操作辅助

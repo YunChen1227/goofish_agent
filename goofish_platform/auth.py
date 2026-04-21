@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 from loguru import logger
@@ -47,15 +48,22 @@ class AuthManager:
         self._modal_selectors = modal_selectors or _DEFAULT_MODAL_SELECTORS
         self._cookie_file = f"{cookie_prefix}cookies.json" if cookie_prefix else self.COOKIE_FILE
 
-    async def ensure_logged_in(self, page: Page) -> bool:
+    async def ensure_logged_in(
+        self,
+        page: Page,
+        *,
+        user_closed_check: Callable[[], None] | None = None,
+    ) -> bool:
         """Navigate to platform base URL and block until logged in."""
+        if user_closed_check:
+            user_closed_check()
         await page.goto(self._base_url, wait_until="load")
         await asyncio.sleep(3)
 
         if await self._is_logged_in(page):
             logger.info("已登录且主界面就绪")
             return True
-        return await self._wait_until_logged_in(page)
+        return await self._wait_until_logged_in(page, user_closed_check=user_closed_check)
 
     async def _is_logged_in(self, page: Page) -> bool:
         try:
@@ -87,7 +95,12 @@ class AuthManager:
         except Exception:
             return False
 
-    async def _wait_until_logged_in(self, page: Page) -> bool:
+    async def _wait_until_logged_in(
+        self,
+        page: Page,
+        *,
+        user_closed_check: Callable[[], None] | None = None,
+    ) -> bool:
         """Poll until playwright confirms: logged in + no modal blocking."""
         logger.info("=" * 50)
         logger.info("请在浏览器中完成登录（弹窗关闭后自动继续）")
@@ -98,7 +111,11 @@ class AuthManager:
 
         deadline = time.monotonic() + MAX_WAIT_SECONDS
         while time.monotonic() < deadline:
+            if user_closed_check:
+                user_closed_check()
             await asyncio.sleep(POLL_INTERVAL)
+            if user_closed_check:
+                user_closed_check()
             if await self._is_logged_in(page):
                 logger.info("登录完成，主界面就绪，继续执行任务")
                 return True

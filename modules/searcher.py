@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from loguru import logger
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from goofish_agent.ai.keyword_optimizer import KeywordOptimizer, OptimizationResult
 from goofish_agent.ai.llm_client import LLMClient
@@ -20,8 +20,26 @@ from goofish_agent.goofish_platform.parsers.search_parser import ProductBrief
 from goofish_agent.platform.base import PlatformClient
 
 
+# Top-level key under ``task.result_summary`` used as the Searcher's
+# breakpoint cache.  Resume-friendly runs read the cache first before
+# hitting the platform again.
+_SEARCH_STATE_KEY = "search_state"
+
+
 class Searcher:
-    """Phase 1: Search, filter, optional image matching, and initial scoring."""
+    """Phase 1: Search, filter, optional image matching, and initial scoring.
+
+    **Breakpoint resume** (for interrupted tasks):
+
+    * After the smart-search loop (platform search + LLM relevance) succeeds,
+      the resulting briefs + the keyword ultimately used are persisted into
+      ``task.result_summary[_SEARCH_STATE_KEY]``.  Re-entering :meth:`execute`
+      skips the expensive search / LLM round-trips when such a cache exists.
+    * While iterating briefs, ``ProductCandidate`` rows are committed **as they
+      pass filters** (rather than only at the end), so a crash mid-iteration
+      preserves already-verified products.  On re-run, products already in the
+      DB for this task are skipped.
+    """
 
     MAX_KEYWORD_OPTIMIZE_RETRIES = 3
     MISMATCH_THRESHOLD = 0.8
@@ -43,35 +61,79 @@ class Searcher:
             f"排除关键词: {task.exclude_keywords or '无'}"
         )
 
-        briefs = await self._smart_search(task)
+        # 1) Try to reuse cached briefs (resume scenario); otherwise do smart search.
+        cached_state = self._load_search_state(task)
+        if cached_state and cached_state.get("briefs"):
+            briefs = [self._brief_from_dict(b) for b in cached_state["briefs"]]
+            logger.info(
+                f"[断点续跑] 从缓存加载 {len(briefs)} 个搜索结果 "
+                f"(关键词: '{cached_state.get('keywords_used', task.keywords)}')，跳过搜索+相关性判定"
+            )
+        else:
+            briefs = await self._smart_search(task)
+            if briefs:
+                # Persist the brief list (with product URLs) *before* doing any
+                # expensive detail scraping, so a crash doesn't lose progress.
+                self._save_search_state(
+                    task,
+                    keywords_used=task.keywords,
+                    briefs=briefs,
+                )
 
         logger.info(f"[搜索] 共 {len(briefs)} 个结果，开始逐一检查")
 
         MAX_DETAIL_ATTEMPTS = 10
 
-        candidates: list[ProductCandidate] = []
+        # 2) Skip briefs whose ProductCandidate rows are already in the DB for
+        #    this task — covers mid-loop crash / resume.
+        existing_ids = self._existing_candidate_ids(task)
+        if existing_ids:
+            logger.info(
+                f"[断点续跑] 跳过数据库已有的 {len(existing_ids)} 个已处理商品"
+            )
+
+        candidates: list[ProductCandidate] = list(
+            self._session.exec(
+                select(ProductCandidate).where(ProductCandidate.task_id == task.id)
+            ).all()
+        )
         attempts = 0
         for brief in briefs[: task.max_candidates]:
             if not brief.product_id:
                 continue
+            if brief.product_id in existing_ids:
+                continue
             attempts += 1
             detail = await self._client.get_product_detail(brief.product_id)
             if not detail:
-                logger.info(f"[搜索 {attempts}/{MAX_DETAIL_ATTEMPTS}] ✗ 详情获取失败: {brief.product_id}")
-            elif not self._passes_filters(detail, task):
-                logger.info(f"[搜索 {attempts}/{MAX_DETAIL_ATTEMPTS}] ✗ 未通过筛选: {brief.title}")
-            else:
-                candidates.append(self._to_candidate(detail, task.id))
                 logger.info(
-                    f"[搜索 {attempts}/{MAX_DETAIL_ATTEMPTS}] ✓ 通过筛选: {detail.title} | "
-                    f"¥{detail.price} | 卖家信用: {detail.seller_credit}"
+                    f"[搜索 {attempts}/{MAX_DETAIL_ATTEMPTS}] ✗ 详情获取失败: "
+                    f"{brief.product_id}"
+                )
+            elif not self._passes_filters(detail, task):
+                logger.info(
+                    f"[搜索 {attempts}/{MAX_DETAIL_ATTEMPTS}] ✗ 未通过筛选: {brief.title}"
+                )
+            else:
+                candidate = self._to_candidate(detail, task.id)
+                # Commit immediately so this product survives interruption.
+                self._session.add(candidate)
+                self._session.commit()
+                candidates.append(candidate)
+                existing_ids.add(brief.product_id)
+                logger.info(
+                    f"[搜索 {attempts}/{MAX_DETAIL_ATTEMPTS}] ✓ 通过筛选并入库: "
+                    f"{detail.title} | ¥{detail.price} | "
+                    f"卖家信用: {detail.seller_credit}"
                 )
             if attempts >= MAX_DETAIL_ATTEMPTS:
                 logger.info(f"已检查 {MAX_DETAIL_ATTEMPTS} 个商品，停止搜索")
                 break
 
         if task.reference_images:
-            logger.info(f"[搜索] 开始图片匹配，参考图片: {len(task.reference_images)}张")
+            logger.info(
+                f"[搜索] 开始图片匹配，参考图片: {len(task.reference_images)}张"
+            )
             candidates = await self._apply_image_matching(candidates, task)
 
         candidates = self._score_and_sort(candidates, task)
@@ -79,18 +141,84 @@ class Searcher:
         if candidates:
             logger.info("[搜索] 初始评分排序结果:")
             for i, c in enumerate(candidates, 1):
-                img_info = f" | 图片匹配: {c.image_match_score:.2f}" if c.image_match_score is not None else ""
+                img_info = (
+                    f" | 图片匹配: {c.image_match_score:.2f}"
+                    if c.image_match_score is not None
+                    else ""
+                )
                 logger.info(
                     f"  #{i} {c.title} | ¥{c.price} | "
                     f"综合评分: {c.initial_score:.3f}{img_info}"
                 )
 
-        for c in candidates:
-            self._session.add(c)
         self._session.commit()
 
         logger.info(f"Phase 1 完成: {len(candidates)} 个候选商品")
         return candidates
+
+    # ------------------------------------------------------------------
+    # Breakpoint / state helpers
+    # ------------------------------------------------------------------
+
+    def _load_search_state(self, task: Task) -> dict | None:
+        summary = task.result_summary or {}
+        state = summary.get(_SEARCH_STATE_KEY)
+        if isinstance(state, dict):
+            return state
+        return None
+
+    def _save_search_state(
+        self, task: Task, *, keywords_used: str, briefs: list[ProductBrief]
+    ) -> None:
+        summary = dict(task.result_summary or {})
+        summary[_SEARCH_STATE_KEY] = {
+            "keywords_used": keywords_used,
+            "briefs": [self._brief_to_dict(b) for b in briefs],
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+        }
+        task.result_summary = summary
+        task.updated_at = datetime.now(timezone.utc)
+        self._session.commit()
+        logger.info(
+            f"[搜索] 已持久化 {len(briefs)} 条搜索结果到 task.result_summary "
+            f"(供断点续跑使用)"
+        )
+
+    def _existing_candidate_ids(self, task: Task) -> set[str]:
+        rows = self._session.exec(
+            select(ProductCandidate.platform_product_id).where(
+                ProductCandidate.task_id == task.id
+            )
+        ).all()
+        return {pid for pid in rows if pid}
+
+    @staticmethod
+    def _brief_to_dict(brief: ProductBrief) -> dict:
+        return {
+            "product_id": brief.product_id,
+            "title": brief.title,
+            "price": brief.price,
+            "image_url": brief.image_url,
+            "seller_name": brief.seller_name,
+            "location": brief.location,
+            "product_url": brief.product_url,
+        }
+
+    @staticmethod
+    def _brief_from_dict(data: dict) -> ProductBrief:
+        return ProductBrief(
+            product_id=data.get("product_id", ""),
+            title=data.get("title", ""),
+            price=float(data.get("price", 0.0) or 0.0),
+            image_url=data.get("image_url", ""),
+            seller_name=data.get("seller_name", ""),
+            location=data.get("location", ""),
+            product_url=data.get("product_url", ""),
+        )
+
+    # ------------------------------------------------------------------
+    # Smart search (keyword optimization loop)
+    # ------------------------------------------------------------------
 
     async def _smart_search(self, task: Task) -> list[ProductBrief]:
         """Search with agent-powered keyword optimization and up to
@@ -103,7 +231,9 @@ class Searcher:
             briefs = await self._client.search(
                 current_keywords, self._build_filters(task)
             )
-            logger.info(f"[搜索] 搜索到 {len(briefs)} 个结果 (关键词: '{current_keywords}')")
+            logger.info(
+                f"[搜索] 搜索到 {len(briefs)} 个结果 (关键词: '{current_keywords}')"
+            )
 
             if not briefs:
                 logger.warning(f"[搜索] 关键词 '{current_keywords}' 无搜索结果")
@@ -140,7 +270,8 @@ class Searcher:
                 and opt_result.optimized_keywords != current_keywords
             ):
                 logger.warning(
-                    f"[搜索-关键词优化] 触发关键词优化（第 {attempt + 1}/{self.MAX_KEYWORD_OPTIMIZE_RETRIES} 次）\n"
+                    f"[搜索-关键词优化] 触发关键词优化（第 {attempt + 1}/"
+                    f"{self.MAX_KEYWORD_OPTIMIZE_RETRIES} 次）\n"
                     f"  '{current_keywords}' → '{opt_result.optimized_keywords}'"
                 )
                 current_keywords = opt_result.optimized_keywords
@@ -297,10 +428,20 @@ class Searcher:
     ) -> list[ProductCandidate]:
         matched: list[ProductCandidate] = []
         for i, c in enumerate(candidates, 1):
+            if c.image_match_score is not None:
+                # Already computed in a previous (interrupted) run.
+                if c.image_match_score >= task.image_match_threshold:
+                    matched.append(c)
+                continue
             if c.images:
                 logger.info(f"[图片匹配 {i}/{len(candidates)}] 对比: {c.title}")
-                score = await self._vlm.match_images(c.images[:3], task.reference_images)
+                score = await self._vlm.match_images(
+                    c.images[:3], task.reference_images
+                )
                 c.image_match_score = score
+                # Persist per-candidate so the score is not recomputed on resume.
+                self._session.add(c)
+                self._session.commit()
                 if score >= task.image_match_threshold:
                     logger.info(
                         f"[图片匹配 {i}/{len(candidates)}] ✓ 匹配度 {score:.2f} "
@@ -313,9 +454,13 @@ class Searcher:
                         f"< 阈值 {task.image_match_threshold} → 淘汰"
                     )
             else:
-                logger.info(f"[图片匹配 {i}/{len(candidates)}] 无商品图片，跳过匹配: {c.title}")
+                logger.info(
+                    f"[图片匹配 {i}/{len(candidates)}] 无商品图片，跳过匹配: {c.title}"
+                )
                 matched.append(c)
-        logger.info(f"[图片匹配] 结果: {len(matched)}/{len(candidates)} 通过图片匹配")
+        logger.info(
+            f"[图片匹配] 结果: {len(matched)}/{len(candidates)} 通过图片匹配"
+        )
         return matched
 
     def _score_and_sort(
@@ -323,10 +468,19 @@ class Searcher:
     ) -> list[ProductCandidate]:
         price_range = task.max_price - task.target_price
         for c in candidates:
-            price_s = max(0.0, 1 - (c.price - task.target_price) / price_range) if price_range > 0 else 1.0
+            price_s = (
+                max(0.0, 1 - (c.price - task.target_price) / price_range)
+                if price_range > 0
+                else 1.0
+            )
             credit_s = min((c.seller_credit or 0) / 1000.0, 1.0)
             if c.image_match_score is not None:
-                c.initial_score = 0.3 * price_s + 0.2 * credit_s + 0.3 * c.image_match_score + 0.2
+                c.initial_score = (
+                    0.3 * price_s
+                    + 0.2 * credit_s
+                    + 0.3 * c.image_match_score
+                    + 0.2
+                )
             else:
                 c.initial_score = 0.4 * price_s + 0.3 * credit_s + 0.3
         candidates.sort(key=lambda x: x.initial_score, reverse=True)

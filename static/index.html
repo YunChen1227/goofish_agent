@@ -38,8 +38,11 @@
   .task-item { padding: 9px 16px; border-bottom: 1px solid #1f2332; cursor: pointer; font-size: 12px; transition: background 0.1s; }
   .task-item:hover { background: #1f2332; }
   .task-item.active { background: #1e3a5f; border-left: 3px solid #3b82f6; }
-  .task-item .kw { font-weight: 600; color: #e5e7eb; display: flex; align-items: center; gap: 6px; }
+  .task-item .kw { font-weight: 600; color: #e5e7eb; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .task-item .meta { color: #6b7280; margin-top: 2px; font-size: 11px; }
+  .task-item-row { display: flex; align-items: flex-start; gap: 8px; }
+  .task-item-main { flex: 1; min-width: 0; }
+  button.task-item-del { padding: 4px 10px; font-size: 10px; flex-shrink: 0; margin-top: 1px; }
 
   .status-tag { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; }
   .status-running { background: #1e3a5f; color: #60a5fa; }
@@ -273,20 +276,54 @@ function clearLog() {
   logLineCount = 0;
 }
 
-function startLogStream() {
-  if (logEvtSource) { logEvtSource.close(); logEvtSource = null; }
-  const dot = document.getElementById("live-dot");
-  dot.style.background = "#22c55e";
+// currentLogTaskId === null -> no task selected, show "select a task" placeholder
+// currentLogTaskId === "<uuid>" -> stream /api/logs/stream?task_id=<uuid>
+let currentLogTaskId = null;
+let logReconnectTimer = null;
 
-  logEvtSource = new EventSource("/api/logs/stream?last_n=300");
+function setLogPlaceholder(text) {
+  const out = document.getElementById("log-output");
+  out.innerHTML = `<div class="log-line info" style="color:#4b5563;">${esc(text)}</div>`;
+  logLineCount = 0;
+}
+
+function startLogStream(taskId) {
+  // Stop any previous stream / reconnect timer first
+  if (logEvtSource) { logEvtSource.close(); logEvtSource = null; }
+  if (logReconnectTimer) { clearTimeout(logReconnectTimer); logReconnectTimer = null; }
+
+  currentLogTaskId = taskId || null;
+  clearLog();
+
+  const dot = document.getElementById("live-dot");
+  if (!currentLogTaskId) {
+    dot.style.background = "#6b7280";
+    setLogPlaceholder("← 选择或创建任务以查看其日志");
+    return;
+  }
+
+  dot.style.background = "#22c55e";
+  const url = `/api/logs/stream?last_n=300&task_id=${encodeURIComponent(currentLogTaskId)}`;
+  logEvtSource = new EventSource(url);
   logEvtSource.onmessage = (e) => {
     if (e.data && e.data.trim()) appendLog(e.data);
   };
   logEvtSource.onerror = () => {
     dot.style.background = "#ef4444";
-    // 5s 后重连
-    setTimeout(startLogStream, 5000);
+    // 仅在当前仍绑定同一任务时重连
+    const boundId = currentLogTaskId;
+    logReconnectTimer = setTimeout(() => {
+      if (currentLogTaskId === boundId && boundId) startLogStream(boundId);
+    }, 5000);
   };
+}
+
+function stopLogStream() {
+  if (logEvtSource) { logEvtSource.close(); logEvtSource = null; }
+  if (logReconnectTimer) { clearTimeout(logReconnectTimer); logReconnectTimer = null; }
+  currentLogTaskId = null;
+  document.getElementById("live-dot").style.background = "#6b7280";
+  setLogPlaceholder("← 选择或创建任务以查看其日志");
 }
 
 // ── Form submit ───────────────────────────────────────────────────────
@@ -317,6 +354,7 @@ document.getElementById("create-form").addEventListener("submit", async (e) => {
     e.target.reset();
     await loadTasks();
     selectTask(task.id);
+    startLogStream(task.id);
   } catch (err) { toast("创建失败: " + err.message); }
 });
 
@@ -328,13 +366,25 @@ async function loadTasks() {
   const list = document.getElementById("task-list");
   if (!tasks.length) { list.innerHTML = '<div class="empty">暂无任务</div>'; return; }
   list.innerHTML = tasks.map(t => `
-    <div class="task-item ${t.id===selectedTaskId?'active':''}" data-id="${t.id}">
-      <div class="kw">${esc(t.keywords)} <span class="status-tag status-${t.status}">${t.status}</span></div>
-      <div class="meta">${t.platform} · ${t.current_phase||'待开始'} · ¥${t.target_price}→¥${t.max_price}</div>
+    <div class="task-item ${t.id===selectedTaskId?'active':''}" data-id="${t.id}" data-status="${esc(t.status)}">
+      <div class="task-item-row">
+        <div class="task-item-main">
+          <div class="kw">${esc(t.keywords)} <span class="status-tag status-${t.status}">${t.status}</span></div>
+          <div class="meta">${t.platform} · ${t.current_phase||'待开始'} · ¥${t.target_price}→¥${t.max_price}</div>
+        </div>
+        <button type="button" class="danger task-item-del" title="删除任务">删除</button>
+      </div>
     </div>`).join("");
   list.querySelectorAll(".task-item").forEach(el =>
     el.addEventListener("click", () => selectTask(el.dataset.id))
   );
+  list.querySelectorAll(".task-item-del").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const row = btn.closest(".task-item");
+      if (row) deleteTask(row.dataset.id, row.dataset.status || "");
+    });
+  });
 }
 
 function esc(s) { return (s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
@@ -347,6 +397,7 @@ function selectTask(id) {
   if (pollTimer) clearInterval(pollTimer);
   renderDetail();
   pollTimer = setInterval(renderDetail, 2000);
+  if (id !== currentLogTaskId) startLogStream(id);
 }
 
 // ── Render detail ─────────────────────────────────────────────────────
@@ -386,6 +437,7 @@ function drawProgress(p) {
     <div class="phases">${phasesHtml}</div>
     <div class="actions">
       <button class="secondary" onclick="doAction('pause')" ${p.status!=='running'?'disabled':''}>暂停</button>
+      <button class="secondary" onclick="doAction('resume')" ${!['paused','error'].includes(p.status)?'disabled':''} title="从上次中断的阶段继续执行（断点续跑）">续跑</button>
       <button class="danger" onclick="doAction('cancel')" ${TERMINAL.includes(p.status)?'disabled':''}>取消</button>
     </div>`;
 }
@@ -416,13 +468,39 @@ async function doAction(kind) {
   if (!selectedTaskId) return;
   try {
     await api(`/api/tasks/${selectedTaskId}/${kind}`, {method:"POST"});
-    toast(kind==="pause"?"已暂停":"已取消");
+    const labels = {pause:"已暂停", cancel:"已取消", resume:"已恢复，正在断点续跑"};
+    toast(labels[kind] || "操作成功");
     renderDetail(); loadTasks();
   } catch (err) { toast("操作失败: "+err.message); }
 }
 
+async function deleteTask(taskId, status) {
+  if (status === "running") {
+    const ok = window.confirm(
+      "该任务正在运行中，删除将终止后台执行并永久移除该任务及关联数据（候选、鉴定记录等）。\n\n确定要删除吗？"
+    );
+    if (!ok) return;
+  }
+  try {
+    await api(`/api/tasks/${taskId}`, { method: "DELETE" });
+    toast("任务已删除");
+    if (selectedTaskId === taskId) {
+      selectedTaskId = null;
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      document.getElementById("progress-area").innerHTML =
+        '<div class="empty" style="color:#4b5563;padding:8px 0;">← 从左侧选择或创建任务</div>';
+      document.getElementById("tables-panel").innerHTML =
+        '<div class="empty" style="margin-top:40px;">选择任务后显示候选商品与谈判结果</div>';
+    }
+    if (currentLogTaskId === taskId) stopLogStream();
+    await loadTasks();
+  } catch (err) {
+    toast("删除失败: " + err.message);
+  }
+}
+
 // ── Init ──────────────────────────────────────────────────────────────
-startLogStream();
+stopLogStream();  // 初始占位：提示用户选择任务
 loadTasks();
 setInterval(loadTasks, 3000);
 </script>
