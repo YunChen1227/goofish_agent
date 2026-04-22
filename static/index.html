@@ -151,6 +151,10 @@
           <option selected>LIKE_NEW</option><option>LIGHTLY_USED</option>
           <option>WELL_USED</option><option>FAIR</option><option>POOR</option>
         </select>
+        <label>常见物品损伤/瑕疵模式（可选，会写入品相鉴定提示）</label>
+        <textarea name="damage_pattern_description" rows="3" placeholder="例如：背板易有细长划痕、屏幕边缘有磕碰、转轴处易开裂…"></textarea>
+        <label>常见损伤参考图 URL（可选，每行一个，可多张，用于对照品相）</label>
+        <textarea name="damage_example_images" rows="3" placeholder="https://..."></textarea>
         <label>地域（可选）</label>
         <input name="location" placeholder="同城 / 江浙沪" />
         <label>排除关键词（逗号分隔）</label>
@@ -163,6 +167,11 @@
         <textarea name="reference_images" placeholder="https://..."></textarea>
         <label>图片匹配阈值 (0-1)</label>
         <input name="image_match_threshold" type="number" step="0.05" value="0.6" />
+        <label>买家 TODO List（JSON 数组，可选；会与默认清单合并）</label>
+        <textarea name="buyer_todo_list" rows="5" placeholder='[
+  {"title":"是否进过水","user_prompt":"直接问卖家，若回避追问维修记录","priority_hint":"critical"},
+  {"title":"电池循环次数","user_prompt":"请卖家截图设置里的电池健康"}
+]'></textarea>
         <label>自定义指令</label>
         <textarea name="custom_instructions" placeholder="必须带原装充电器..."></textarea>
         <label>通知渠道</label>
@@ -337,6 +346,8 @@ document.getElementById("create-form").addEventListener("submit", async (e) => {
     max_price: parseFloat(fd.get("max_price")),
     target_price: parseFloat(fd.get("target_price")),
     condition_requirement: fd.get("condition_requirement"),
+    damage_pattern_description: (v => (v && v.trim()) ? v.trim() : null)(fd.get("damage_pattern_description") || ""),
+    damage_example_images: (fd.get("damage_example_images")||"").split("\n").map(s=>s.trim()).filter(Boolean),
     location: fd.get("location") || null,
     exclude_keywords: (fd.get("exclude_keywords")||"").split(",").map(s=>s.trim()).filter(Boolean),
     max_candidates: parseInt(fd.get("max_candidates")) || 20,
@@ -345,6 +356,16 @@ document.getElementById("create-form").addEventListener("submit", async (e) => {
     image_match_threshold: parseFloat(fd.get("image_match_threshold")||0.6),
     custom_instructions: fd.get("custom_instructions") || null,
     notification_channel: fd.get("notification_channel"),
+    buyer_todo_list: (() => {
+      const raw = (fd.get("buyer_todo_list")||"").trim();
+      if (!raw) return [];
+      try {
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr.filter(x => x && typeof x === "object") : [];
+      } catch (e) {
+        throw new Error("买家 TODO List 不是合法 JSON 数组: " + e.message);
+      }
+    })(),
   };
   try {
     const task = await api("/api/tasks/", {

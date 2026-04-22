@@ -18,5 +18,7 @@ class SellerConversation(SQLModel, table=True):
     chat_status: ChatStatus = ChatStatus.INIT
     seller_attitude: Optional[str] = None
     info_collected: dict = Field(default={}, sa_column=Column(JSON, default={}))
+    # TODO 驱动对话的核心状态（items + plan），见 ai/todo_agents.py 的结构说明
+    todo_state: Optional[dict] = Field(default=None, sa_column=Column(JSON))
     started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     last_message_at: Optional[datetime] = None

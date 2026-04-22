@@ -88,6 +88,9 @@ async def create_task(body: TaskCreate) -> Task:
             prefer_verified=body.prefer_verified,
             reference_images=body.reference_images,
             image_match_threshold=body.image_match_threshold,
+            damage_pattern_description=body.damage_pattern_description,
+            damage_example_images=body.damage_example_images,
+            buyer_todo_list=body.buyer_todo_list,
             custom_instructions=body.custom_instructions,
             notification_channel=NotificationChannel[body.notification_channel],
         )

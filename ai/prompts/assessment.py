@@ -30,13 +30,34 @@ IMAGE_MATCH_PROMPT = """请对比以下两组图片的视觉相似度。
 请仅输出一个 0 到 1 之间的浮点数表示匹配度，1 表示完全一致，0 表示完全不同。
 只输出数字，不要其他内容。"""
 
+DAMAGE_CRITERIA_ADDON = """
+额外要求（用户提供的「常见损伤」判定依据，用于辅助品相判断）:
+- 用户以文字补充了在意的常见损伤/瑕疵模式。评估时请结合该说明，在 defects 中具体标注是否与这些模式相关。
+- 若用户提供了「常见损伤参考图」，请将商品实拍与这些参考图对照，判断是否存在**相同或类似类型**的损伤（如划痕位置与形态、掉漆范围、形变、屏幕点线等），并在 summary 中简要说明。"""
 
-def build_assessment_prompt(description: str, has_reference: bool = False) -> str:
+
+def build_assessment_prompt(
+    description: str,
+    has_reference: bool = False,
+    *,
+    has_damage_criteria: bool = False,
+) -> str:
     system = ASSESSMENT_SYSTEM_PROMPT
+    if has_damage_criteria:
+        system += DAMAGE_CRITERIA_ADDON
     if has_reference:
         system += REFERENCE_IMAGE_ADDON
     return system
 
 
-def build_assessment_user_message(description: str) -> str:
-    return f"商品描述:\n{description}\n\n请评估以上商品的品相。"
+def build_assessment_user_message(
+    description: str,
+    damage_pattern_description: str | None = None,
+) -> str:
+    text = f"商品描述:\n{description}\n"
+    if damage_pattern_description and damage_pattern_description.strip():
+        text += (
+            "\n用户补充的常见物品损伤/瑕疵模式（请结合实拍重点核查）:\n"
+            f"{damage_pattern_description.strip()}\n"
+        )
+    return text + "\n请评估以上商品的品相。"

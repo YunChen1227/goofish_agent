@@ -36,6 +36,16 @@ class Task(SQLModel, table=True):
     prefer_verified: bool = False
     reference_images: list[str] = Field(default=[], sa_column=Column(JSON, default=[]))
     image_match_threshold: float = 0.6
+    # 用户描述的在意的常见损伤模式；与 damage_example_images 一并写入 VLM 品相 prompt
+    damage_pattern_description: Optional[str] = None
+    damage_example_images: list[str] = Field(
+        default=[], sa_column=Column(JSON, default=[])
+    )
+    # 用户自定义的「卖家沟通 TODO 模板」。每项至少包含 title/user_prompt，
+    # 可选 priority_hint；Chatter 初始化对话时会拷贝到 SellerConversation.todo_state
+    buyer_todo_list: list[dict] = Field(
+        default=[], sa_column=Column(JSON, default=[])
+    )
     custom_instructions: Optional[str] = None
     notification_channel: NotificationChannel = NotificationChannel.IN_APP
     status: TaskStatus = TaskStatus.PENDING

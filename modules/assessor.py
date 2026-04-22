@@ -218,10 +218,13 @@ class Assessor:
                     logger.warning(f"[图片获取] 异常，回退原始 URL: {e}")
             ref_images = task.reference_images if task.reference_images else None
 
+            dmg_urls = list(task.damage_example_images or [])
             result = await self._vlm.assess_product(
                 images=images,
                 description=f"{candidate.title}\n{candidate.description}",
                 reference_images=ref_images,
+                damage_pattern_description=task.damage_pattern_description,
+                damage_example_images=dmg_urls if dmg_urls else None,
             )
 
             return AssessmentReport(

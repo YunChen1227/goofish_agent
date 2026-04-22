@@ -35,23 +35,42 @@ class VLMClient:
         images: list[str],
         description: str,
         reference_images: list[str] | None = None,
+        damage_pattern_description: str | None = None,
+        damage_example_images: list[str] | None = None,
     ) -> dict:
         has_ref = bool(reference_images)
-        system_prompt = build_assessment_prompt(description, has_reference=has_ref)
-        user_text = build_assessment_user_message(description)
+        dmg_ex = [u for u in (damage_example_images or []) if u and str(u).strip()]
+        has_damage = bool(
+            (damage_pattern_description and damage_pattern_description.strip()) or dmg_ex
+        )
+        system_prompt = build_assessment_prompt(
+            description, has_reference=has_ref, has_damage_criteria=has_damage
+        )
+        user_text = build_assessment_user_message(
+            description, damage_pattern_description=damage_pattern_description
+        )
 
         logger.info(
             f"[VLM 品相鉴定] 发送请求 | 模型: {self._model} | "
             f"商品图片: {len(images)}张 | "
-            f"参考图片: {len(reference_images) if reference_images else 0}张"
+            f"参考图片(款式): {len(reference_images) if reference_images else 0}张 | "
+            f"常见损伤参考图: {len(dmg_ex)}张"
         )
         logger.debug(f"[VLM 品相鉴定] 商品描述: {description[:200]}")
         logger.debug(f"[VLM 品相鉴定] System Prompt:\n{system_prompt[:500]}")
 
         content: list[dict] = [{"type": "text", "text": user_text}]
         content.extend(self._build_image_content(images, label="商品图片"))
+        if dmg_ex:
+            content.append(
+                {
+                    "type": "text",
+                    "text": "以下是用户提供的「常见损伤」参考图（请对照上方商品实拍，判断是否存在相同或类似损伤）:",
+                }
+            )
+            content.extend(self._build_image_content(dmg_ex, label="常见损伤参考图"))
         if reference_images:
-            content.append({"type": "text", "text": "以下是买家提供的参考图片:"})
+            content.append({"type": "text", "text": "以下是买家提供的参考图片(款式/型号对照用):"})
             content.extend(self._build_image_content(reference_images, label="参考图片"))
 
         resp = await self._client.chat.completions.create(
