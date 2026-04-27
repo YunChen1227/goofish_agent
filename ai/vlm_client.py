@@ -154,16 +154,19 @@ class VLMClient:
     ) -> list[dict]:
         blocks: list[dict] = []
         for img in images:
-            if img.startswith(("http://", "https://")):
+            img_url = img.strip()
+            if not img_url:
+                continue
+            if img_url.startswith(("http://", "https://", "data:image/")):
                 blocks.append(
-                    {"type": "image_url", "image_url": {"url": img, "detail": "high"}}
+                    {"type": "image_url", "image_url": {"url": img_url, "detail": "high"}}
                 )
             else:
                 blocks.append(
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": f"data:image/jpeg;base64,{img}",
+                            "url": f"data:image/jpeg;base64,{img_url}",
                             "detail": "high",
                         },
                     }

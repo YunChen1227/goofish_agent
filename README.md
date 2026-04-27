@@ -151,7 +151,9 @@ python -m goofish_agent.main
 | `exclude_keywords` | 排除词列表 |
 | `max_candidates` / `max_negotiate_count` / `negotiate_rounds_limit` | 数量与轮次上限 |
 | `seller_min_credit` / `prefer_verified` | 卖家信用与认证偏好 |
-| `reference_images` / `image_match_threshold` | 参考图与图像匹配阈值 |
+| `reference_images` / `image_match_threshold` | 参考图与图像匹配阈值；可传 HTTP(S) 图片 URL，也可传 `data:image/...;base64,...` 或纯 base64 图片 |
+| `damage_pattern_description` / `damage_example_images` | 常见损伤描述与损伤参考图；图片格式同 `reference_images` |
+| `buyer_todo_list` | 卖家沟通 TODO；可传 JSON 数组，也可传自然语言描述，后端会调用大模型生成结构化 TODO 后维护 |
 | `custom_instructions` | 自定义说明 |
 | `notification_channel` | `"IN_APP"`、`"EMAIL"` 或 `"WEBHOOK"`（与 `NotificationChannel` 一致） |
 

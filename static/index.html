@@ -26,6 +26,7 @@
   }
   input:focus, select:focus, textarea:focus { outline: none; border-color: #3b82f6; }
   textarea { resize: vertical; min-height: 40px; }
+  .field-hint { margin-top: 3px; font-size: 11px; color: #6b7280; line-height: 1.35; }
   .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   button { padding: 7px 14px; border: none; border-radius: 4px; background: #2563eb; color: #fff; font-size: 12px; cursor: pointer; font-weight: 500; }
   button.secondary { background: #374151; }
@@ -153,8 +154,10 @@
         </select>
         <label>常见物品损伤/瑕疵模式（可选，会写入品相鉴定提示）</label>
         <textarea name="damage_pattern_description" rows="3" placeholder="例如：背板易有细长划痕、屏幕边缘有磕碰、转轴处易开裂…"></textarea>
-        <label>常见损伤参考图 URL（可选，每行一个，可多张，用于对照品相）</label>
+        <label>常见损伤参考图（可选，每行一个 URL，或上传多张图片，用于对照品相）</label>
         <textarea name="damage_example_images" rows="3" placeholder="https://..."></textarea>
+        <input name="damage_example_image_files" type="file" accept="image/*" multiple />
+        <div class="field-hint">支持 HTTP 图片链接和本地上传图片，二者会一起发送给模型。</div>
         <label>地域（可选）</label>
         <input name="location" placeholder="同城 / 江浙沪" />
         <label>排除关键词（逗号分隔）</label>
@@ -163,15 +166,15 @@
           <div><label>最多候选数</label><input name="max_candidates" type="number" value="20" /></div>
           <div><label>最多谈判数</label><input name="max_negotiate_count" type="number" value="5" /></div>
         </div>
-        <label>参考图 URL（每行一个）</label>
+        <label>参考图（每行一个 URL，或上传多张图片）</label>
         <textarea name="reference_images" placeholder="https://..."></textarea>
+        <input name="reference_image_files" type="file" accept="image/*" multiple />
+        <div class="field-hint">可上传买家本地参考图，也可继续填写网络图片 URL。</div>
         <label>图片匹配阈值 (0-1)</label>
         <input name="image_match_threshold" type="number" step="0.05" value="0.6" />
-        <label>买家 TODO List（JSON 数组，可选；会与默认清单合并）</label>
-        <textarea name="buyer_todo_list" rows="5" placeholder='[
-  {"title":"是否进过水","user_prompt":"直接问卖家，若回避追问维修记录","priority_hint":"critical"},
-  {"title":"电池循环次数","user_prompt":"请卖家截图设置里的电池健康"}
-]'></textarea>
+        <label>买家 TODO List（可用自然语言描述，也可填 JSON 数组；会与默认清单合并）</label>
+        <textarea name="buyer_todo_list" rows="5" placeholder="例如：重点帮我确认有没有进水维修，电池健康和循环次数，配件是不是原装，最好问一下是否支持当面验货。"></textarea>
+        <div class="field-hint">自然语言会由大模型生成可维护 TODO；需要精确控制时仍可填写 JSON 数组。</div>
         <label>自定义指令</label>
         <textarea name="custom_instructions" placeholder="必须带原装充电器..."></textarea>
         <label>通知渠道</label>
@@ -335,39 +338,62 @@ function stopLogStream() {
   setLogPlaceholder("← 选择或创建任务以查看其日志");
 }
 
+function linesFromTextarea(fd, name) {
+  return (fd.get(name)||"").split("\n").map(s=>s.trim()).filter(Boolean);
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error(`读取图片失败: ${file.name}`));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function imageInputs(fd, urlField, fileField) {
+  const urls = linesFromTextarea(fd, urlField);
+  const files = fd.getAll(fileField).filter(file => file && file.size > 0);
+  const uploaded = await Promise.all(files.map(fileToDataUrl));
+  return urls.concat(uploaded);
+}
+
+function todoInput(fd) {
+  const raw = (fd.get("buyer_todo_list")||"").trim();
+  if (!raw) return [];
+  if (!raw.startsWith("[") && !raw.startsWith("{")) return raw;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter(x => x && typeof x === "object") : raw;
+  } catch (e) {
+    return raw;
+  }
+}
+
 // ── Form submit ───────────────────────────────────────────────────────
 document.getElementById("create-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const fd = new FormData(e.target);
-  const body = {
-    platform: fd.get("platform"),
-    keywords: fd.get("keywords"),
-    min_price: parseFloat(fd.get("min_price") || 0),
-    max_price: parseFloat(fd.get("max_price")),
-    target_price: parseFloat(fd.get("target_price")),
-    condition_requirement: fd.get("condition_requirement"),
-    damage_pattern_description: (v => (v && v.trim()) ? v.trim() : null)(fd.get("damage_pattern_description") || ""),
-    damage_example_images: (fd.get("damage_example_images")||"").split("\n").map(s=>s.trim()).filter(Boolean),
-    location: fd.get("location") || null,
-    exclude_keywords: (fd.get("exclude_keywords")||"").split(",").map(s=>s.trim()).filter(Boolean),
-    max_candidates: parseInt(fd.get("max_candidates")) || 20,
-    max_negotiate_count: parseInt(fd.get("max_negotiate_count")) || 5,
-    reference_images: (fd.get("reference_images")||"").split("\n").map(s=>s.trim()).filter(Boolean),
-    image_match_threshold: parseFloat(fd.get("image_match_threshold")||0.6),
-    custom_instructions: fd.get("custom_instructions") || null,
-    notification_channel: fd.get("notification_channel"),
-    buyer_todo_list: (() => {
-      const raw = (fd.get("buyer_todo_list")||"").trim();
-      if (!raw) return [];
-      try {
-        const arr = JSON.parse(raw);
-        return Array.isArray(arr) ? arr.filter(x => x && typeof x === "object") : [];
-      } catch (e) {
-        throw new Error("买家 TODO List 不是合法 JSON 数组: " + e.message);
-      }
-    })(),
-  };
   try {
+    const body = {
+      platform: fd.get("platform"),
+      keywords: fd.get("keywords"),
+      min_price: parseFloat(fd.get("min_price") || 0),
+      max_price: parseFloat(fd.get("max_price")),
+      target_price: parseFloat(fd.get("target_price")),
+      condition_requirement: fd.get("condition_requirement"),
+      damage_pattern_description: (v => (v && v.trim()) ? v.trim() : null)(fd.get("damage_pattern_description") || ""),
+      damage_example_images: await imageInputs(fd, "damage_example_images", "damage_example_image_files"),
+      location: fd.get("location") || null,
+      exclude_keywords: (fd.get("exclude_keywords")||"").split(",").map(s=>s.trim()).filter(Boolean),
+      max_candidates: parseInt(fd.get("max_candidates")) || 20,
+      max_negotiate_count: parseInt(fd.get("max_negotiate_count")) || 5,
+      reference_images: await imageInputs(fd, "reference_images", "reference_image_files"),
+      image_match_threshold: parseFloat(fd.get("image_match_threshold")||0.6),
+      custom_instructions: fd.get("custom_instructions") || null,
+      notification_channel: fd.get("notification_channel"),
+      buyer_todo_list: todoInput(fd),
+    };
     const task = await api("/api/tasks/", {
       method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body),
     });

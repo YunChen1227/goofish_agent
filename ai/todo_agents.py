@@ -18,8 +18,10 @@ from goofish_agent.ai.llm_client import LLMClient
 from goofish_agent.ai.prompts.todo import (
     CHECKER_SYSTEM_PROMPT,
     PLANNER_SYSTEM_PROMPT,
+    TODO_BUILDER_SYSTEM_PROMPT,
     build_checker_user_message,
     build_planner_user_message,
+    build_todo_builder_user_message,
     safe_load_json,
 )
 
@@ -60,6 +62,88 @@ def normalize_todo_item(raw: dict, fallback_id: str) -> dict:
         "updated_at": None,
     }
     return item
+
+
+def fallback_todos_from_text(raw_text: str) -> list[dict]:
+    """LLM 不可用时，把自然语言按行/标点粗略拆成可维护 TODO。"""
+    import re
+
+    text = (raw_text or "").strip()
+    if not text:
+        return []
+    parts = [
+        p.strip(" -—\t\r\n")
+        for p in re.split(r"[\n;；。]+", text)
+        if p.strip(" -—\t\r\n")
+    ]
+    if not parts:
+        parts = [text]
+    todos: list[dict] = []
+    for idx, part in enumerate(parts[:8], 1):
+        title = part[:24]
+        todos.append(
+            {
+                "title": title,
+                "user_prompt": f"向卖家确认：{part}",
+                "priority_hint": "normal",
+            }
+        )
+    return todos
+
+
+async def build_todos_from_description(
+    llm: LLMClient,
+    raw_description: str,
+    keywords: str | None = None,
+    custom_instructions: str | None = None,
+) -> list[dict]:
+    """把买家的自然语言 TODO 描述转成结构化 TODO 列表。"""
+    raw_description = (raw_description or "").strip()
+    if not raw_description:
+        return []
+
+    user_msg = build_todo_builder_user_message(
+        raw_description,
+        keywords=keywords,
+        custom_instructions=custom_instructions,
+    )
+    try:
+        raw = await llm.generate(TODO_BUILDER_SYSTEM_PROMPT, user_msg, temperature=0.2)
+    except Exception as e:
+        logger.warning(f"[TodoBuilder] LLM 调用失败，使用本地拆分兜底：{e}")
+        return fallback_todos_from_text(raw_description)
+
+    parsed = safe_load_json(raw)
+    todos = parsed.get("todos") if isinstance(parsed, dict) else parsed
+    if not isinstance(todos, list):
+        logger.warning(f"[TodoBuilder] 无法解析 TODO 生成结果，使用本地拆分兜底：{raw[:200]}")
+        return fallback_todos_from_text(raw_description)
+
+    normalized: list[dict] = []
+    seen_titles: set[str] = set()
+    for idx, item in enumerate(todos, 1):
+        if not isinstance(item, dict):
+            continue
+        todo = normalize_todo_item(item, fallback_id=f"u{idx}")
+        if not todo["title"] or todo["title"] in seen_titles:
+            continue
+        normalized.append(
+            {
+                "title": todo["title"],
+                "user_prompt": todo["user_prompt"] or f"向卖家确认「{todo['title']}」",
+                "priority_hint": todo.get("priority_hint") or "normal",
+            }
+        )
+        seen_titles.add(todo["title"])
+
+    if not normalized:
+        return fallback_todos_from_text(raw_description)
+
+    logger.info(
+        f"[TodoBuilder] 根据自然语言生成 {len(normalized)} 个 TODO: "
+        f"{[i['title'] for i in normalized]}"
+    )
+    return normalized
 
 
 def build_initial_todo_state(

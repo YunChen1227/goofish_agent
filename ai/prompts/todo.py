@@ -1,6 +1,7 @@
-"""TODO 驱动对话的三个 prompt 模板。
+"""TODO 驱动对话的 prompt 模板。
 
 数据流：
+- Builder: 任务创建时，把买家的自然语言要求转成结构化 TODO；
 - Planner: 只跑一次（或 lazy replan 触发时）——产出 plan.order / plan.next / plan.reasoning。
 - Checker: 每次卖家回复后跑——只打勾和填 result/evidence，不决定下一步。
 - Inquiry: 每轮询问前按 todo_state 渲染 "待办 / 已完成" 状态拼给 Reply Agent。
@@ -53,7 +54,51 @@ def render_todo_board(todo_state: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 1) PLANNER
+# 1) NATURAL LANGUAGE TODO BUILDER
+# ---------------------------------------------------------------------------
+
+TODO_BUILDER_SYSTEM_PROMPT = """你是一个二手交易买家沟通清单设计师。
+
+你的任务是：把买家用自然语言描述的关注点，转成后续与卖家沟通时可维护的 TODO 清单。
+
+生成原则：
+1) 每个 TODO 只确认一个明确事项，方便后续逐项打勾；
+2) title 要短，像清单标题；user_prompt 要说明应该向卖家确认什么；
+3) 涉及安全、真伪、维修、隐藏瑕疵、退款风险的项标为 critical；
+4) 普通使用信息、配件、保修、交易方式标为 normal；
+5) 不要生成已经与卖家无关、无法询问、或过于宽泛的项；
+6) 通常生成 3-8 项，除非买家明确要求更多。
+
+只能输出 JSON，schema 如下：
+{
+  "todos": [
+    {
+      "title": "简短标题",
+      "user_prompt": "向卖家确认的具体问题",
+      "priority_hint": "critical|normal|low"
+    }
+  ]
+}
+"""
+
+
+def build_todo_builder_user_message(
+    raw_description: str,
+    keywords: str | None = None,
+    custom_instructions: str | None = None,
+) -> str:
+    parts: list[str] = []
+    if keywords:
+        parts.append(f"购买目标/搜索关键词: {keywords}")
+    if custom_instructions:
+        parts.append(f"买家额外指令: {custom_instructions[:500]}")
+    parts.append(f"买家自然语言 TODO 描述:\n{raw_description[:1500]}")
+    parts.append("请输出 todos JSON。")
+    return "\n\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# 2) PLANNER
 # ---------------------------------------------------------------------------
 
 PLANNER_SYSTEM_PROMPT = """你是一个二手交易沟通策略规划师。
@@ -99,7 +144,7 @@ def build_planner_user_message(
 
 
 # ---------------------------------------------------------------------------
-# 2) CHECKER
+# 3) CHECKER
 # ---------------------------------------------------------------------------
 
 CHECKER_SYSTEM_PROMPT = """你是一个对话分析员，负责核对买家的 TODO 是否已经被卖家的最新回复回答。
@@ -140,7 +185,7 @@ def build_checker_user_message(
 
 
 # ---------------------------------------------------------------------------
-# 3) TODO-AWARE INQUIRY (Reply Agent)
+# 4) TODO-AWARE INQUIRY (Reply Agent)
 # ---------------------------------------------------------------------------
 
 TODO_INQUIRY_SYSTEM_PROMPT = """你是一位友好的二手商品买家，与卖家沟通。

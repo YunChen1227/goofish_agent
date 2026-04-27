@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class TaskCreate(BaseModel):
@@ -22,7 +22,7 @@ class TaskCreate(BaseModel):
     image_match_threshold: float = 0.6
     damage_pattern_description: str | None = None
     damage_example_images: list[str] = []
-    buyer_todo_list: list[dict] = []
+    buyer_todo_list: list[dict] | str = Field(default_factory=list)
     custom_instructions: str | None = None
     notification_channel: str = "IN_APP"
 

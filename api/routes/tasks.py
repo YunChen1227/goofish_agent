@@ -9,6 +9,11 @@ from fastapi import APIRouter, HTTPException
 from loguru import logger
 from sqlmodel import select
 
+from goofish_agent.ai.llm_client import LLMClient
+from goofish_agent.ai.todo_agents import (
+    build_todos_from_description,
+    fallback_todos_from_text,
+)
 from goofish_agent.config.logging import remove_task_log_file
 from goofish_agent.core.state_machine import PHASE_ORDER
 from goofish_agent.core.task_manager import TaskManager
@@ -29,6 +34,25 @@ from goofish_agent.storage.database import get_session
 router = APIRouter()
 
 _task_managers: dict[PlatformType, TaskManager] = {}
+
+
+async def _resolve_buyer_todos(body: TaskCreate) -> list[dict]:
+    """Accept structured TODO JSON or natural language and persist structured items."""
+    raw = body.buyer_todo_list
+    if isinstance(raw, str):
+        if not raw.strip():
+            return []
+        try:
+            return await build_todos_from_description(
+                LLMClient(),
+                raw,
+                keywords=body.keywords,
+                custom_instructions=body.custom_instructions,
+            )
+        except Exception as e:
+            logger.warning(f"[TodoBuilder] 初始化失败，使用本地拆分兜底：{e}")
+            return fallback_todos_from_text(raw)
+    return [item for item in (raw or []) if isinstance(item, dict)]
 
 
 def _run_in_worker_loop(coro_factory) -> None:
@@ -69,6 +93,7 @@ def get_task_manager(platform: PlatformType) -> TaskManager:
 
 @router.post("/", response_model=TaskResponse)
 async def create_task(body: TaskCreate) -> Task:
+    buyer_todo_list = await _resolve_buyer_todos(body)
     with get_session() as session:
         task = Task(
             id=uuid4(),
@@ -90,7 +115,7 @@ async def create_task(body: TaskCreate) -> Task:
             image_match_threshold=body.image_match_threshold,
             damage_pattern_description=body.damage_pattern_description,
             damage_example_images=body.damage_example_images,
-            buyer_todo_list=body.buyer_todo_list,
+            buyer_todo_list=buyer_todo_list,
             custom_instructions=body.custom_instructions,
             notification_channel=NotificationChannel[body.notification_channel],
         )
